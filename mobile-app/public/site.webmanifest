@@ -1,0 +1,21 @@
+{
+  "name": "Wordle Unlimited Party",
+  "short_name": "Wordle Party",
+  "description": "Play unlimited Wordle online with friends, real-time multiplayer boards, voice chat, hints, and difficulty levels.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#071018",
+  "theme_color": "#16C75A",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "/og-image.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    }
+  ]
+}

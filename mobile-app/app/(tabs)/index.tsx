@@ -97,7 +97,7 @@ export default function GameScreen() {
   const isShort = height < 740;
   const supportsVibration = Platform.OS !== 'web'
     || (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function');
-  const [view, setView] = useState<AppView>('splash');
+  const [view, setView] = useState<AppView>('mode');
   const [selectedMode, setSelectedMode] = useState<PlayMode>('solo');
   const [diffModal, setDiffModal] = useState(false);
   const [statsModal, setStatsModal] = useState(false);
@@ -312,15 +312,6 @@ export default function GameScreen() {
     void submitGuess();
   };
 
-  if (!sessionId) {
-    return (
-      <View style={[styles.center, themed.root]}>
-        <ActivityIndicator size="large" color="#16C75A" />
-        <Text style={[styles.mutedText, themed.mutedText]}>Loading Wordle Unlimited...</Text>
-      </View>
-    );
-  }
-
   const getInviteLink = () => {
     if (!roomId) return '';
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -422,7 +413,7 @@ export default function GameScreen() {
 
   const goBack = () => {
     if (view === 'splash') return;
-    if (view === 'mode') setView('splash');
+    if (view === 'mode') return;
     else if (view === 'difficulty') setView('mode');
     else if (view === 'roomCreated') setView('party');
     else if (view === 'solo') setView('difficulty');
@@ -492,6 +483,13 @@ export default function GameScreen() {
   const renderBoard = () => (
     <View style={styles.boardShell}>
       <View style={styles.toastSlot}>{toast ? <ToastBanner message={toast.message} type={toast.type} /> : null}</View>
+      {!sessionId ? (
+        <View style={styles.boardLoading}>
+          <ActivityIndicator size="small" color="#16C75A" />
+          <Text style={[styles.boardLoadingText, themed.mutedText]}>Preparing puzzle...</Text>
+        </View>
+      ) : (
+        <>
       {gameStatus === 'playing' && (
         <View style={styles.hintBar}>
           <TouchableOpacity
@@ -555,6 +553,8 @@ export default function GameScreen() {
       </View>
       <Keyboard onKeyPress={handleLetterPress} onEnter={handleSubmitPress} onDelete={handleDeletePress} letterStates={letterStates} />
       {roomId && <Text style={styles.typingLine}>{typingPlayerName ? `${typingPlayerName} is typing...` : activeBoard === 'shared' ? 'Shared board ready' : 'Your private board'}</Text>}
+        </>
+      )}
     </View>
   );
 
@@ -592,6 +592,24 @@ export default function GameScreen() {
                 <Text style={styles.modeDesc}>Play with friends in real time with optional voice.</Text>
               </View>
             </TouchableOpacity>
+            <View style={styles.seoPanel}>
+              <Text accessibilityRole="header" style={styles.seoTitle}>Wordle Unlimited Party</Text>
+              <Text style={styles.seoText}>
+                Play unlimited Wordle online in solo mode or create a multiplayer party room with friends. Rooms support shared boards, private boards, real-time typing, hints, answer meanings, and optional voice chat.
+              </Text>
+              <Text style={styles.seoSubtitle}>How to play</Text>
+              <Text style={styles.seoText}>
+                Guess the hidden five-letter word. Green letters are correct, yellow letters are in the word but placed differently, and dark letters are not in the answer.
+              </Text>
+              <Text style={styles.seoSubtitle}>Features</Text>
+              <Text style={styles.seoText}>
+                Unlimited puzzles, multiplayer Wordle rooms, live voice chat, shareable invite links, multiple difficulty levels, useful hints, statistics, and mobile-friendly gameplay.
+              </Text>
+              <Text style={styles.seoSubtitle}>FAQ</Text>
+              <Text style={styles.seoText}>
+                Is it free? Yes. Do I need an account? No. Can I play with friends? Yes, create a party room and share the link or room code.
+              </Text>
+            </View>
           </ScrollView>
         )}
 
@@ -1121,6 +1139,10 @@ const styles = StyleSheet.create({
   modeCopy: { flex: 1 },
   modeTitle: { color: '#F8FAFC', fontSize: 16, fontWeight: '900', textTransform: 'uppercase' },
   modeDesc: { color: '#D1D5DB', fontSize: 13, lineHeight: 18, marginTop: 6, fontWeight: '700' },
+  seoPanel: { marginTop: 18, borderTopWidth: 1, borderTopColor: '#1F2937', paddingTop: 18, gap: 8 },
+  seoTitle: { color: '#F8FAFC', fontSize: 18, fontWeight: '900' },
+  seoSubtitle: { color: '#16C75A', fontSize: 13, fontWeight: '900', textTransform: 'uppercase', marginTop: 8 },
+  seoText: { color: '#CBD5E1', fontSize: 13, lineHeight: 19, fontWeight: '700' },
   difficultyList: { gap: 10, marginTop: 12 },
   diffCard: { minHeight: 76, borderRadius: 16, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
   diffBadge: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
@@ -1184,6 +1206,8 @@ const styles = StyleSheet.create({
   playerChipCompact: { flex: 0, width: 45, minHeight: 32, justifyContent: 'center', paddingHorizontal: 5 },
   playerChipText: { flex: 1, color: '#F8FAFC', fontSize: 11, fontWeight: '800' },
   boardShell: { flex: 1, width: '100%', maxWidth: 520, alignSelf: 'center', alignItems: 'center', justifyContent: 'flex-start', minHeight: 0 },
+  boardLoading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
+  boardLoadingText: { color: '#9CA3AF', fontSize: 12, fontWeight: '800' },
   toastSlot: { height: 24, justifyContent: 'center' },
   toast: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999 },
   toastText: { color: '#fff', fontSize: 12, fontWeight: '900' },

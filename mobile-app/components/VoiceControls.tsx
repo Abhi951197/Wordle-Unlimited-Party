@@ -1,7 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Room, RoomEvent, Track, createLocalAudioTrack } from 'livekit-client';
-import type { LocalAudioTrack } from 'livekit-client';
 import type { LiveKitSession } from '@/store/GameState';
 
 interface VoiceControlsProps {
@@ -11,8 +9,8 @@ interface VoiceControlsProps {
 }
 
 export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact = false, enabled = true }) => {
-  const roomRef = useRef<Room | null>(null);
-  const audioTrackRef = useRef<LocalAudioTrack | null>(null);
+  const roomRef = useRef<any>(null);
+  const audioTrackRef = useRef<any>(null);
   const audioHostRef = useRef<any>(null);
   const remoteElementsRef = useRef<Map<string, HTMLMediaElement>>(new Map());
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
@@ -60,7 +58,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
   }
 
   const attachRemoteAudio = (track: any, publication: any, participant: any) => {
-    if (track.kind !== Track.Kind.Audio || Platform.OS !== 'web') return;
+    if (track.kind !== 'audio' || Platform.OS !== 'web') return;
     const key = `${participant.identity}:${publication.trackSid}`;
     if (remoteElementsRef.current.has(key)) return;
 
@@ -76,7 +74,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
   };
 
   const detachRemoteAudio = (track: any, publication: any, participant: any) => {
-    if (track.kind !== Track.Kind.Audio || Platform.OS !== 'web') return;
+    if (track.kind !== 'audio' || Platform.OS !== 'web') return;
     const key = `${participant.identity}:${publication.trackSid}`;
     const element = remoteElementsRef.current.get(key);
     track.detach?.(element);
@@ -105,6 +103,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
     setStatus('connecting');
 
     try {
+      const { Room, RoomEvent, createLocalAudioTrack } = await import('livekit-client');
       const room = new Room();
       roomRef.current = room;
 
