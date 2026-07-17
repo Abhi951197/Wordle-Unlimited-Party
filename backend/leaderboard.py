@@ -262,49 +262,45 @@ def init_db() -> None:
 
 
 def _backfill_stats_from_results(conn) -> None:
-    existing_period = _row_to_dict(_execute(conn, "SELECT COUNT(*) AS count FROM player_period_stats").fetchone()) or {}
-    if int(existing_period.get("count") or 0) == 0:
-        rows = [_row_to_dict(row) for row in _execute(
+    _execute(conn, "DELETE FROM player_period_stats")
+    rows = [_row_to_dict(row) for row in _execute(
+        conn,
+        "SELECT * FROM game_results ORDER BY created_at ASC",
+    ).fetchall()]
+    for row in rows:
+        if not row:
+            continue
+        created_at = row.get("created_at") or _now_iso()
+        week_key, _, _ = _week_bounds(_parse_iso(created_at))
+        won = bool(row.get("won"))
+        _update_period_stats(
             conn,
-            "SELECT * FROM game_results ORDER BY created_at ASC",
-        ).fetchall()]
-        for row in rows:
-            if not row:
-                continue
-            created_at = row.get("created_at") or _now_iso()
-            week_key, _, _ = _week_bounds(_parse_iso(created_at))
-            won = bool(row.get("won"))
-            _update_period_stats(
-                conn,
-                row["user_id"],
-                row["scope"],
-                "all_time",
-                ALL_TIME_KEY,
-                int(row.get("score_delta") or 0),
-                won,
-                int(row.get("guesses") or 0),
-                int(row.get("hints_used") or 0),
-                created_at,
-            )
-            _update_period_stats(
-                conn,
-                row["user_id"],
-                row["scope"],
-                "weekly",
-                week_key,
-                int(row.get("score_delta") or 0),
-                won,
-                int(row.get("guesses") or 0),
-                int(row.get("hints_used") or 0),
-                created_at,
-            )
+            row["user_id"],
+            row["scope"],
+            "all_time",
+            ALL_TIME_KEY,
+            int(row.get("score_delta") or 0),
+            won,
+            int(row.get("guesses") or 0),
+            int(row.get("hints_used") or 0),
+            created_at,
+        )
+        _update_period_stats(
+            conn,
+            row["user_id"],
+            row["scope"],
+            "weekly",
+            week_key,
+            int(row.get("score_delta") or 0),
+            won,
+            int(row.get("guesses") or 0),
+            int(row.get("hints_used") or 0),
+            created_at,
+        )
 
     stat_rows = [_row_to_dict(row) for row in _execute(conn, "SELECT * FROM player_stats WHERE wins > 0").fetchall()]
     for stat in stat_rows:
         if not stat:
-            continue
-        existing_distribution = sum(int(stat.get(f"guess_{index}") or 0) for index in range(1, 7))
-        if existing_distribution > 0:
             continue
         counts = [0, 0, 0, 0, 0, 0]
         results = [_row_to_dict(row) for row in _execute(
