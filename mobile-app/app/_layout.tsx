@@ -51,7 +51,8 @@ export default function RootLayout() {
           <meta name="robots" content="index,follow" />
           <meta name="theme-color" content="#16C75A" />
           <link rel="canonical" href={SITE_URL} />
-          <link rel="icon" href="/favicon.ico" />
+          <link rel="icon" type="image/png" href="/favicon.png" />
+          <link rel="apple-touch-icon" href="/favicon.png" />
           <link rel="manifest" href="/site.webmanifest" />
           <meta name="keywords" content="wordle unlimited, wordle multiplayer, word game online, play wordle with friends, wordle party, voice chat word game" />
           <meta property="og:type" content="website" />
@@ -59,11 +60,11 @@ export default function RootLayout() {
           <meta property="og:description" content={SITE_DESCRIPTION} />
           <meta property="og:url" content={SITE_URL} />
           <meta property="og:site_name" content="Wordle Unlimited Party" />
-          <meta property="og:image" content={`${SITE_URL}/og-image.png`} />
+          <meta property="og:image" content={`${SITE_URL}/party-illustration.png`} />
           <meta name="twitter:card" content="summary_large_image" />
           <meta name="twitter:title" content={SITE_TITLE} />
           <meta name="twitter:description" content={SITE_DESCRIPTION} />
-          <meta name="twitter:image" content={`${SITE_URL}/og-image.png`} />
+          <meta name="twitter:image" content={`${SITE_URL}/party-illustration.png`} />
           <script type="application/ld+json">{JSON.stringify(structuredData)}</script>
         </Head>
         <Stack>
