@@ -3,6 +3,7 @@ import { Link } from 'expo-router';
 import {
   ActivityIndicator,
   Modal,
+  Image,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -561,7 +562,7 @@ export default function GameScreen() {
 
   return (
     <SafeAreaView style={[styles.container, themed.root]}>
-      <View style={[styles.appFrame, themed.root, isWide && styles.appFrameWide]}>
+      <View style={[styles.appFrame, themed.root, isWide && styles.appFrameWide, view === 'mode' && isWide && styles.appFrameHomeWide]}>
         {view === 'splash' && (
           <View style={[styles.screen, themed.root]}>
             <View style={styles.splashBody}>
@@ -575,44 +576,91 @@ export default function GameScreen() {
         )}
 
         {view === 'mode' && (
-          <ScrollView contentContainerStyle={[styles.scrollScreen, styles.centeredScreen]} showsVerticalScrollIndicator={false}>
-            <TouchableOpacity style={styles.floatingBack} onPress={goBack}><Text style={styles.smallIconText}>{'<'}</Text></TouchableOpacity>
-            <Text style={[styles.pageTitle, themed.titleText]}>Choose Game Mode</Text>
-            <Text style={[styles.pageSub, themed.mutedText]}>Play your way</Text>
-            <TouchableOpacity style={[styles.modeCard, styles.soloCard]} onPress={() => chooseMode('solo')} activeOpacity={0.82}>
-              <View style={styles.modeIcon}><Text style={styles.modeIconText}>S</Text></View>
-              <View style={styles.modeCopy}>
-                <Text style={styles.modeTitle}>Solo Mode</Text>
-                <Text style={styles.modeDesc}>Play alone and challenge yourself.</Text>
+          <ScrollView contentContainerStyle={[styles.homeScroll, !isWide && styles.homeScrollMobile]} showsVerticalScrollIndicator={false}>
+            <View style={styles.homeShell}>
+              <View style={[styles.homeTopBar, !isWide && styles.homeTopBarMobile]}>
+                <TouchableOpacity style={styles.homeBackBtn} onPress={goBack}><Text style={styles.smallIconText}>{'<'}</Text></TouchableOpacity>
+                <View style={styles.homeBrandRow}>
+                  <View style={styles.homeLogoTiles}>
+                    {['W', 'O', 'R', 'D'].map((letter, index) => (
+                      <View key={letter} style={[styles.homeLogoTile, index === 1 ? styles.homeLogoYellow : index === 2 ? styles.homeLogoPurple : styles.homeLogoGreen]}>
+                        <Text style={styles.homeLogoTileText}>{letter}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <View>
+                    <Text style={styles.homeLogoName}>WORDLE</Text>
+                    <Text style={styles.homeLogoSub}>Unlimited Party</Text>
+                  </View>
+                </View>
+                <View style={styles.homeNav}>
+                  <Link href={'/how-to-play' as never} style={styles.homeNavLink}>How to Play</Link>
+                  <Link href={'/features' as never} style={styles.homeNavLink}>Features</Link>
+                  <Link href={'/contact' as never} style={styles.homeNavLink}>Contact</Link>
+                </View>
               </View>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.modeCard, styles.partyCard]} onPress={() => chooseMode('party')} activeOpacity={0.82}>
-              <View style={[styles.modeIcon, styles.partyIcon]}><Text style={styles.modeIconText}>P</Text></View>
-              <View style={styles.modeCopy}>
-                <Text style={styles.modeTitle}>Party Mode</Text>
-                <Text style={styles.modeDesc}>Play with friends in real time with optional voice.</Text>
+
+              <View style={[styles.homePanel, !isWide && styles.homePanelMobile]}>
+                <View style={styles.homeHeroCopy}>
+                  <Text style={styles.homeEyebrow}>Fun. Unlimited. Together.</Text>
+                  <Text accessibilityRole="header" style={[styles.homeTitle, !isWide && styles.homeTitleMobile]}>Wordle Unlimited Party</Text>
+                  <Text style={[styles.homeDesc, !isWide && styles.homeDescMobile]}>
+                    Play your way. Challenge your mind solo, or create a party room and solve Wordle with friends in real time.
+                  </Text>
+                  <View style={[styles.homeActionGrid, !isWide && styles.homeActionGridMobile]}>
+                    <TouchableOpacity style={[styles.homeModeCard, styles.homeSoloCard]} onPress={() => chooseMode('solo')} activeOpacity={0.86}>
+                      <View style={styles.homeModeTop}>
+                        <View style={styles.homeModeIcon}><Text style={styles.homeModeIconText}>♛</Text></View>
+                        <Text style={styles.homeModeArrow}>→</Text>
+                      </View>
+                      <Text style={styles.homeModeTitle}>Solo Mode</Text>
+                      <Text style={styles.homeModeDesc}>Play alone, choose difficulty, and build your streak.</Text>
+                      <Text style={styles.homeModeCta}>Play Solo</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.homeModeCard, styles.homePartyCard]} onPress={() => chooseMode('party')} activeOpacity={0.86}>
+                      <View style={styles.homeModeTop}>
+                        <View style={[styles.homeModeIcon, styles.homePartyIcon]}><Text style={styles.homeModeIconText}>👥</Text></View>
+                        <Text style={styles.homeModeArrow}>→</Text>
+                      </View>
+                      <Text style={styles.homeModeTitle}>Party Mode</Text>
+                      <Text style={styles.homeModeDesc}>Create or join a room with optional voice and chat.</Text>
+                      <Text style={[styles.homeModeCta, styles.homePartyCta]}>Create / Join</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                {isWide && (
+                  <View style={styles.homeArtCard}>
+                    <Image source={{ uri: '/party-illustration.png' }} style={styles.homeArtImage} resizeMode="cover" />
+                    <View style={styles.homeArtBadge}><Text style={styles.homeArtBadgeText}>Live party rooms</Text></View>
+                  </View>
+                )}
               </View>
-            </TouchableOpacity>
-            <View style={styles.seoPanel}>
-              <Text accessibilityRole="header" style={styles.seoTitle}>Wordle Unlimited Party</Text>
-              <Text style={styles.seoText}>
-                Play unlimited Wordle online in solo mode or create a multiplayer party room with friends. Rooms support shared boards, private boards, real-time typing, hints, answer meanings, and optional voice chat.
-              </Text>
-              <Text style={styles.seoSubtitle}>How to play</Text>
-              <Text style={styles.seoText}>
-                Guess the hidden five-letter word. Green letters are correct, yellow letters are in the word but placed differently, and dark letters are not in the answer.
-              </Text>
-              <Text style={styles.seoSubtitle}>Features</Text>
-              <Text style={styles.seoText}>
-                Unlimited puzzles, multiplayer Wordle rooms, live voice chat, shareable invite links, multiple difficulty levels, useful hints, statistics, and mobile-friendly gameplay.
-              </Text>
-              <Text style={styles.seoSubtitle}>FAQ</Text>
-              <Text style={styles.seoText}>
-                Is it free? Yes. Do I need an account? No. Can I play with friends? Yes, create a party room and share the link or room code.
-              </Text>
-              <View style={styles.seoLinkRow}>
-                <Link href={'/how-to-play' as never} style={styles.seoLink}>How to Play</Link>
-                <Link href={'/features' as never} style={styles.seoLink}>Features</Link>
+
+              <View style={styles.homeFeatureStrip}>
+                <View style={styles.homeFeature}><Text style={styles.homeFeatureIcon}>∞</Text><Text style={styles.homeFeatureTitle}>Unlimited Puzzles</Text><Text style={styles.homeFeatureText}>Endless fun</Text></View>
+                <View style={styles.homeFeature}><Text style={styles.homeFeatureIcon}>🎙️</Text><Text style={styles.homeFeatureTitle}>Live Voice Chat</Text><Text style={styles.homeFeatureText}>Optional</Text></View>
+                <View style={styles.homeFeature}><Text style={styles.homeFeatureIcon}>👥</Text><Text style={styles.homeFeatureTitle}>Multiple Rooms</Text><Text style={styles.homeFeatureText}>Invite friends</Text></View>
+                <View style={styles.homeFeature}><Text style={styles.homeFeatureIcon}>💡</Text><Text style={styles.homeFeatureTitle}>Smart Hints</Text><Text style={styles.homeFeatureText}>Use wisely</Text></View>
+              </View>
+
+              <View style={styles.homeSeoGrid}>
+                <View style={styles.homeSeoPanel}>
+                  <Text style={styles.seoTitle}>How to Play</Text>
+                  <Text style={styles.seoText}>
+                    Guess the hidden five-letter word. Green letters are correct, yellow letters are in the word but placed differently, and dark letters are not in the answer.
+                  </Text>
+                  <Link href={'/how-to-play' as never} style={styles.homeReadMore}>Read the guide →</Link>
+                </View>
+                <View style={styles.homeSeoPanel}>
+                  <Text style={styles.seoTitle}>Why players use it</Text>
+                  <Text style={styles.seoText}>
+                    Unlimited puzzles, multiplayer Wordle rooms, shareable invite links, useful hints, answer meanings, statistics, and mobile-friendly gameplay.
+                  </Text>
+                  <Link href={'/features' as never} style={styles.homeReadMore}>Explore features →</Link>
+                </View>
+              </View>
+
+              <View style={styles.homeFooterLinks}>
                 <Link href={'/privacy' as never} style={styles.seoLink}>Privacy</Link>
                 <Link href={'/terms' as never} style={styles.seoLink}>Terms</Link>
                 <Link href={'/contact' as never} style={styles.seoLink}>Contact</Link>
@@ -1114,6 +1162,7 @@ const styles = StyleSheet.create({
   mutedText: { color: '#9CA3AF', fontSize: 14, marginTop: 10 },
   appFrame: { flex: 1, width: '100%', maxWidth: 440, backgroundColor: '#0B0F16' },
   appFrameWide: { maxWidth: 980, borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#1F2937' },
+  appFrameHomeWide: { maxWidth: 1240, borderLeftWidth: 0, borderRightWidth: 0 },
   screen: { flex: 1, paddingHorizontal: 20, paddingBottom: 18 },
   scrollScreen: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 22 },
   centeredScreen: { justifyContent: 'center' },
@@ -1153,6 +1202,58 @@ const styles = StyleSheet.create({
   seoText: { color: '#CBD5E1', fontSize: 13, lineHeight: 19, fontWeight: '700' },
   seoLinkRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
   seoLink: { color: '#60A5FA', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  homeScroll: { flexGrow: 1, paddingHorizontal: 18, paddingVertical: 18 },
+  homeScrollMobile: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 18 },
+  homeShell: { width: '100%', maxWidth: 1120, alignSelf: 'center', gap: 14 },
+  homeTopBar: { minHeight: 70, borderRadius: 22, borderWidth: 1, borderColor: '#2A1B55', backgroundColor: 'rgba(8,12,26,0.92)', paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 14 },
+  homeTopBarMobile: { alignItems: 'flex-start', flexWrap: 'wrap' },
+  homeBackBtn: { width: 42, height: 42, borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  homeBrandRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 210 },
+  homeLogoTiles: { width: 42, height: 42, flexDirection: 'row', flexWrap: 'wrap', gap: 2 },
+  homeLogoTile: { width: 20, height: 20, borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
+  homeLogoGreen: { backgroundColor: '#22C55E' },
+  homeLogoYellow: { backgroundColor: '#FBBF24' },
+  homeLogoPurple: { backgroundColor: '#8B5CF6' },
+  homeLogoTileText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
+  homeLogoName: { color: '#FFFFFF', fontSize: 17, fontWeight: '900', letterSpacing: 1 },
+  homeLogoSub: { color: '#AEB8CF', fontSize: 11, fontWeight: '800' },
+  homeNav: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' },
+  homeNavLink: { color: '#B8C2D8', fontSize: 12, fontWeight: '900', textDecorationLine: 'none', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: '#10182A' },
+  homePanel: { borderRadius: 28, borderWidth: 1, borderColor: '#6D28D9', backgroundColor: '#07101F', padding: 20, flexDirection: 'row', gap: 20, overflow: 'hidden' },
+  homePanelMobile: { padding: 14, borderRadius: 22, flexDirection: 'column' },
+  homeHeroCopy: { flex: 1.05, justifyContent: 'center', gap: 10, minWidth: 0 },
+  homeEyebrow: { color: '#A78BFA', fontSize: 13, fontWeight: '900', textTransform: 'uppercase' },
+  homeTitle: { color: '#FFFFFF', fontSize: 42, lineHeight: 47, fontWeight: '900' },
+  homeTitleMobile: { fontSize: 30, lineHeight: 35 },
+  homeDesc: { color: '#D4DCEC', fontSize: 15, lineHeight: 23, fontWeight: '700', maxWidth: 620 },
+  homeDescMobile: { fontSize: 14, lineHeight: 21 },
+  homeActionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 8 },
+  homeActionGridMobile: { flexDirection: 'column' },
+  homeModeCard: { flexGrow: 1, flexBasis: 230, minHeight: 198, borderRadius: 20, borderWidth: 1, padding: 18, gap: 10, justifyContent: 'space-between' },
+  homeSoloCard: { borderColor: '#16C75A', backgroundColor: '#082B1A' },
+  homePartyCard: { borderColor: '#8B5CF6', backgroundColor: '#1D123A' },
+  homeModeTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  homeModeIcon: { width: 52, height: 52, borderRadius: 17, backgroundColor: '#16C75A', alignItems: 'center', justifyContent: 'center' },
+  homePartyIcon: { backgroundColor: '#7C3AED' },
+  homeModeIconText: { color: '#FFFFFF', fontSize: 23, fontWeight: '900' },
+  homeModeArrow: { color: '#FFFFFF', fontSize: 24, fontWeight: '900' },
+  homeModeTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: '900' },
+  homeModeDesc: { color: '#D8E1F1', fontSize: 13, lineHeight: 19, fontWeight: '700' },
+  homeModeCta: { alignSelf: 'flex-start', marginTop: 4, color: '#FFFFFF', backgroundColor: '#16A34A', borderRadius: 13, overflow: 'hidden', paddingHorizontal: 14, paddingVertical: 10, fontSize: 13, fontWeight: '900' },
+  homePartyCta: { backgroundColor: '#7C3AED' },
+  homeArtCard: { flex: 0.8, minHeight: 360, borderRadius: 24, borderWidth: 1, borderColor: '#2B2254', backgroundColor: '#0A1020', overflow: 'hidden', justifyContent: 'flex-end' },
+  homeArtImage: { position: 'absolute', width: '120%', height: '120%', opacity: 0.86 },
+  homeArtBadge: { alignSelf: 'flex-start', margin: 16, borderRadius: 999, backgroundColor: 'rgba(5,7,17,0.72)', paddingHorizontal: 14, paddingVertical: 9 },
+  homeArtBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  homeFeatureStrip: { borderRadius: 22, borderWidth: 1, borderColor: '#24314C', backgroundColor: '#0B1426', padding: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  homeFeature: { flexGrow: 1, flexBasis: 160, minHeight: 72, borderRadius: 16, backgroundColor: '#111B2D', paddingHorizontal: 12, paddingVertical: 10, justifyContent: 'center' },
+  homeFeatureIcon: { fontSize: 22, marginBottom: 4 },
+  homeFeatureTitle: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
+  homeFeatureText: { color: '#AEB8CF', fontSize: 11, fontWeight: '800', marginTop: 2 },
+  homeSeoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  homeSeoPanel: { flexGrow: 1, flexBasis: 280, borderRadius: 18, borderWidth: 1, borderColor: '#202B46', backgroundColor: '#0D1728', padding: 16, gap: 8 },
+  homeReadMore: { color: '#60A5FA', fontSize: 13, fontWeight: '900', textDecorationLine: 'none', marginTop: 4 },
+  homeFooterLinks: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 14, paddingVertical: 4 },
   difficultyList: { gap: 10, marginTop: 12 },
   diffCard: { minHeight: 76, borderRadius: 16, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
   diffBadge: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },

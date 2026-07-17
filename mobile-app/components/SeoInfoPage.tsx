@@ -110,11 +110,11 @@ export function SeoInfoPage({ path, title, description, eyebrow, sections }: Seo
       <View style={styles.glowB} />
 
       <View style={styles.shell}>
-        <View style={styles.topBar}>
+        <View style={[styles.topBar, compact && styles.topBarCompact]}>
           <Link href="/" style={styles.logoLink}>
             <MiniLogo />
           </Link>
-          <View style={styles.nav}>
+          <View style={[styles.nav, compact && styles.navCompact]}>
             {navItems.map(item => (
               <Link
                 key={item.href}
@@ -128,7 +128,7 @@ export function SeoInfoPage({ path, title, description, eyebrow, sections }: Seo
         </View>
 
         <View style={[styles.mainGrid, compact && styles.mainGridCompact]}>
-          <View style={[styles.sidebar, compact && styles.sidebarCompact]}>
+          {!compact && <View style={styles.sidebar}>
             <MiniLogo />
             <View style={styles.sideNav}>
               {navItems.map((item, index) => (
@@ -145,15 +145,15 @@ export function SeoInfoPage({ path, title, description, eyebrow, sections }: Seo
                 <Text style={styles.statusText}>Join a party anytime</Text>
               </View>
             </View>
-          </View>
+          </View>}
 
-          <View style={styles.pagePanel}>
+          <View style={[styles.pagePanel, compact && styles.pagePanelCompact]}>
             <View style={[styles.hero, compact && styles.heroCompact]}>
               <View style={styles.heroCopy}>
                 <Link href="/" style={styles.backLink}>← Back to Game</Link>
                 <Text style={[styles.eyebrow, { color: art.accent }]}>{eyebrow}</Text>
-                <Text accessibilityRole="header" style={styles.title}>{cleanTitle}</Text>
-                <Text style={styles.description}>{description}</Text>
+                <Text accessibilityRole="header" style={[styles.title, compact && styles.titleCompact]}>{cleanTitle}</Text>
+                <Text style={[styles.description, compact && styles.descriptionCompact]}>{description}</Text>
                 <View style={styles.quickStats}>
                   <View style={styles.statPill}><Text style={styles.statIcon}>∞</Text><Text style={styles.statText}>Unlimited</Text></View>
                   <View style={styles.statPill}><Text style={styles.statIcon}>🎙️</Text><Text style={styles.statText}>Voice</Text></View>
@@ -161,7 +161,7 @@ export function SeoInfoPage({ path, title, description, eyebrow, sections }: Seo
                 </View>
               </View>
 
-              <View style={[styles.heroArt, { borderColor: art.accent }]}>
+              <View style={[styles.heroArt, compact && styles.heroArtCompact, { borderColor: art.accent }]}>
                 {art.image ? (
                   <Image source={{ uri: art.image }} style={styles.heroImage} resizeMode="cover" />
                 ) : (
@@ -176,7 +176,7 @@ export function SeoInfoPage({ path, title, description, eyebrow, sections }: Seo
 
             <View style={styles.cardGrid}>
               {sections.map((section, index) => (
-                <View key={section.title} style={[styles.section, index === 0 && { borderColor: art.accent }]}>
+                <View key={section.title} style={[styles.section, compact && styles.sectionCompact, index === 0 && { borderColor: art.accent }]}>
                   <View style={styles.sectionHeader}>
                     <View style={[styles.sectionBadge, { backgroundColor: `${art.accent}24`, borderColor: art.accent }]}>
                       <Text style={[styles.sectionBadgeText, { color: art.accent }]}>{String(index + 1).padStart(2, '0')}</Text>
@@ -202,7 +202,7 @@ export function SeoInfoPage({ path, title, description, eyebrow, sections }: Seo
               </View>
             )}
 
-            <View style={styles.footerHero}>
+            <View style={[styles.footerHero, compact && styles.footerHeroCompact]}>
               <Image source={{ uri: '/brand-logo.png' }} style={styles.footerLogoArt} resizeMode="contain" />
               <View style={styles.footerCopy}>
                 <Text style={styles.footerTitle}>Words connect. Games bring us together.</Text>
@@ -233,6 +233,7 @@ const styles = StyleSheet.create({
   glowB: { position: 'absolute', width: 360, height: 360, borderRadius: 180, backgroundColor: 'rgba(34,197,94,0.12)', bottom: 60, left: -130 },
   shell: { width: '100%', maxWidth: 1240, alignSelf: 'center', gap: 18 },
   topBar: { minHeight: 74, borderWidth: 1, borderColor: '#2A1B55', backgroundColor: 'rgba(8,12,26,0.82)', borderRadius: 24, paddingHorizontal: 18, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 18 },
+  topBarCompact: { flexDirection: 'column', alignItems: 'flex-start', borderRadius: 20, paddingHorizontal: 14 },
   logoLink: { textDecorationLine: 'none' },
   logoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   logoTiles: { width: 42, height: 42, flexDirection: 'row', flexWrap: 'wrap', gap: 2 },
@@ -241,6 +242,7 @@ const styles = StyleSheet.create({
   logoName: { color: '#FFFFFF', fontSize: 16, fontWeight: '900', letterSpacing: 1 },
   logoSub: { color: '#B8C2D8', fontSize: 11, fontWeight: '800' },
   nav: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 10 },
+  navCompact: { justifyContent: 'flex-start', width: '100%', gap: 8 },
   navLink: { color: '#B8C2D8', fontSize: 13, fontWeight: '800', paddingHorizontal: 12, paddingVertical: 8, textDecorationLine: 'none' },
   navLinkActive: { color: '#FFFFFF', backgroundColor: '#311465', borderRadius: 12 },
   mainGrid: { flexDirection: 'row', gap: 18, alignItems: 'stretch' },
@@ -257,18 +259,22 @@ const styles = StyleSheet.create({
   statusTitle: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
   statusText: { color: '#9CA3AF', fontSize: 11, fontWeight: '700' },
   pagePanel: { flex: 1, borderWidth: 1, borderColor: '#6D28D9', backgroundColor: 'rgba(7,12,25,0.92)', borderRadius: 26, padding: 20, gap: 18, overflow: 'hidden' },
+  pagePanelCompact: { borderRadius: 22, padding: 14 },
   hero: { flexDirection: 'row', alignItems: 'stretch', gap: 18 },
   heroCompact: { flexDirection: 'column' },
   heroCopy: { flex: 1.1, justifyContent: 'center', gap: 10 },
   backLink: { color: '#A7B3CC', fontSize: 13, fontWeight: '900', textDecorationLine: 'none' },
   eyebrow: { fontSize: 13, fontWeight: '900', textTransform: 'uppercase' },
   title: { color: '#FFFFFF', fontSize: 42, lineHeight: 48, fontWeight: '900' },
+  titleCompact: { fontSize: 30, lineHeight: 36 },
   description: { color: '#D5DCF0', fontSize: 16, lineHeight: 25, fontWeight: '700', maxWidth: 620 },
+  descriptionCompact: { fontSize: 14, lineHeight: 22 },
   quickStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 },
   statPill: { minWidth: 118, borderWidth: 1, borderColor: '#26324D', backgroundColor: '#111B2D', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   statIcon: { color: '#F8FAFC', fontSize: 18, fontWeight: '900' },
   statText: { color: '#E5E7EB', fontSize: 12, fontWeight: '900' },
   heroArt: { flex: 0.9, minHeight: 260, borderWidth: 1, backgroundColor: '#10162A', borderRadius: 24, alignItems: 'center', justifyContent: 'center', padding: 18, overflow: 'hidden', gap: 14 },
+  heroArtCompact: { minHeight: 210, borderRadius: 20 },
   heroImage: { position: 'absolute', width: '120%', height: '120%', opacity: 0.78 },
   heroIcon: { fontSize: 82 },
   heroNote: { color: '#F8FAFC', fontSize: 14, fontWeight: '900', textAlign: 'center', backgroundColor: 'rgba(5,7,17,0.68)', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, overflow: 'hidden' },
@@ -277,6 +283,7 @@ const styles = StyleSheet.create({
   wordTileText: { color: '#FFFFFF', fontSize: 28, fontWeight: '900' },
   cardGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
   section: { flexGrow: 1, flexBasis: 250, borderWidth: 1, borderColor: '#202B46', backgroundColor: '#0D1728', borderRadius: 18, padding: 16, gap: 10 },
+  sectionCompact: { flexBasis: '100%' },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   sectionBadge: { width: 38, height: 38, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   sectionBadgeText: { fontSize: 12, fontWeight: '900' },
@@ -289,6 +296,7 @@ const styles = StyleSheet.create({
   legendYellow: { color: '#FDE68A', fontSize: 12, fontWeight: '900' },
   legendDark: { color: '#CBD5E1', fontSize: 12, fontWeight: '900' },
   footerHero: { minHeight: 230, borderWidth: 1, borderColor: '#2B2254', backgroundColor: '#0A1020', borderRadius: 24, padding: 18, flexDirection: 'row', alignItems: 'center', gap: 20, overflow: 'hidden' },
+  footerHeroCompact: { flexDirection: 'column', alignItems: 'stretch', borderRadius: 20 },
   footerLogoArt: { flex: 1, minHeight: 180 },
   footerCopy: { flex: 1, gap: 10 },
   footerTitle: { color: '#FFFFFF', fontSize: 25, lineHeight: 31, fontWeight: '900' },
