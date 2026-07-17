@@ -68,6 +68,11 @@ export default function RootLayout() {
         </Head>
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="how-to-play" options={{ headerShown: false }} />
+          <Stack.Screen name="features" options={{ headerShown: false }} />
+          <Stack.Screen name="privacy" options={{ headerShown: false }} />
+          <Stack.Screen name="terms" options={{ headerShown: false }} />
+          <Stack.Screen name="contact" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         <StatusBar style="auto" />

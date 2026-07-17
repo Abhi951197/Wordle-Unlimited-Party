@@ -2,12 +2,12 @@ const fs = require('fs');
 const path = require('path');
 
 const DIST_DIR = path.resolve(__dirname, '..', 'dist');
-const HTML_FILES = [
-  'index.html',
-  path.join('(tabs)', 'index.html'),
-];
 
-const seoBlock = String.raw`
+const pages = [
+  {
+    files: ['index.html', path.join('(tabs)', 'index.html')],
+    label: 'Wordle Unlimited Party overview',
+    html: String.raw`
 <main id="seo-content" class="seo-content" aria-label="Wordle Unlimited Party overview">
   <header class="seo-hero">
     <h1>Wordle Unlimited Party</h1>
@@ -32,12 +32,76 @@ const seoBlock = String.raw`
     </ul>
   </section>
   <section>
-    <h2>FAQ</h2>
-    <p><strong>Is Wordle Unlimited Party free?</strong> Yes, it is free to play online.</p>
-    <p><strong>Can I play with friends?</strong> Yes, create a party room and share the room link or code.</p>
-    <p><strong>Do I need an account?</strong> No account is required to start playing.</p>
+    <h2>More Pages</h2>
+    <ul>
+      <li><a href="/how-to-play">How to Play</a></li>
+      <li><a href="/features">Features</a></li>
+      <li><a href="/privacy">Privacy Policy</a></li>
+      <li><a href="/terms">Terms of Use</a></li>
+      <li><a href="/contact">Contact</a></li>
+    </ul>
   </section>
-</main>`;
+</main>`,
+  },
+  {
+    files: ['how-to-play.html'],
+    label: 'How to play Wordle Unlimited Party',
+    html: String.raw`
+<main id="seo-content" class="seo-content" aria-label="How to play Wordle Unlimited Party">
+  <header class="seo-hero">
+    <h1>How to Play Wordle Unlimited Party</h1>
+    <p>Learn how to play Wordle Unlimited Party, read color clues, use hints, and play solo or multiplayer word games online.</p>
+  </header>
+  <section><h2>Basic Rules</h2><p>Guess the hidden five-letter word before you run out of guesses. Green letters are correct, yellow letters are in the word but placed differently, and dark letters are not in the answer.</p></section>
+  <section><h2>Solo Mode</h2><p>Solo mode is a classic unlimited Wordle experience with difficulty levels and statistics.</p></section>
+  <section><h2>Party Mode</h2><p>Party mode lets friends join the same room, use shared or private boards, and optionally talk with voice chat.</p></section>
+</main>`,
+  },
+  {
+    files: ['features.html'],
+    label: 'Wordle Unlimited Party features',
+    html: String.raw`
+<main id="seo-content" class="seo-content" aria-label="Wordle Unlimited Party features">
+  <header class="seo-hero"><h1>Wordle Unlimited Party Features</h1><p>Explore multiplayer rooms, voice chat, shared boards, hints, meanings, statistics, and difficulty levels.</p></header>
+  <section><h2>Multiplayer Rooms</h2><p>Create a room, share a code or invite link, and play Wordle online with friends from different devices.</p></section>
+  <section><h2>Shared and Individual Boards</h2><p>Use shared boards to solve together or individual boards while staying in the same party room.</p></section>
+  <section><h2>Learning Tools</h2><p>Hints, answer meanings, statistics, and difficulty levels help casual and serious word game players.</p></section>
+</main>`,
+  },
+  {
+    files: ['privacy.html'],
+    label: 'Wordle Unlimited Party privacy policy',
+    html: String.raw`
+<main id="seo-content" class="seo-content" aria-label="Wordle Unlimited Party privacy policy">
+  <header class="seo-hero"><h1>Privacy Policy</h1><p>Learn how Wordle Unlimited Party uses gameplay data, room information, analytics, voice chat, and local storage.</p></header>
+  <section><h2>Gameplay Data</h2><p>The app uses guesses, room codes, player names, emoji choices, difficulty, and statistics to run the game.</p></section>
+  <section><h2>Local Storage</h2><p>Recent rooms, settings, and statistics may be stored on your device.</p></section>
+  <section><h2>Voice Chat</h2><p>Voice chat is optional and microphone access is requested only when you choose to join voice.</p></section>
+</main>`,
+  },
+  {
+    files: ['terms.html'],
+    label: 'Wordle Unlimited Party terms of use',
+    html: String.raw`
+<main id="seo-content" class="seo-content" aria-label="Wordle Unlimited Party terms of use">
+  <header class="seo-hero"><h1>Terms of Use</h1><p>Read the terms for playing Wordle Unlimited Party, using party rooms, voice chat, and online word game features.</p></header>
+  <section><h2>Use of the App</h2><p>Wordle Unlimited Party is an online word game for entertainment and learning.</p></section>
+  <section><h2>Player Conduct</h2><p>Use respectful names, chat messages, and voice communication. Do not spam or disrupt rooms.</p></section>
+  <section><h2>Availability</h2><p>Rooms and sessions are best-effort features and may reset during maintenance or deployments.</p></section>
+</main>`,
+  },
+  {
+    files: ['contact.html'],
+    label: 'Contact Wordle Unlimited Party',
+    html: String.raw`
+<main id="seo-content" class="seo-content" aria-label="Contact Wordle Unlimited Party">
+  <header class="seo-hero"><h1>Contact Wordle Unlimited Party</h1><p>Send feedback, bug reports, SEO questions, and multiplayer word game improvement ideas.</p></header>
+  <section><h2>Feedback</h2><p>Share feedback about gameplay, multiplayer rooms, voice chat, hints, design, or mobile responsiveness.</p></section>
+  <section><h2>Bug Reports</h2><p>Include your device, browser, room mode, and the action that caused the issue.</p></section>
+  <section><h2>Search and Indexing</h2><p>This page helps users and search engines find project contact information without running the game UI first.</p></section>
+</main>`,
+  },
+];
 
 const seoStyle = String.raw`
 <style id="seo-content-style">
@@ -46,6 +110,7 @@ const seoStyle = String.raw`
   .seo-content h1{font-size:40px;line-height:1.05;margin:0 0 12px;font-weight:900;color:#f8fafc}
   .seo-content h2{font-size:22px;margin:28px 0 8px;font-weight:900;color:#22c55e}
   .seo-content p{font-size:16px;margin:0 0 10px;color:#cbd5e1}
+  .seo-content a{color:#60a5fa;font-weight:800}
   .seo-content ul{margin:8px 0 0;padding-left:22px;color:#cbd5e1}
   .seo-content li{margin:6px 0}
   .seo-hero{border-bottom:1px solid #1f2937;padding-bottom:22px;margin-bottom:18px}
@@ -57,23 +122,25 @@ const hideAfterHydrationScript = String.raw`
   document.documentElement.classList.add('js-ready');
 </script>`;
 
-for (const relativeFile of HTML_FILES) {
-  const filePath = path.join(DIST_DIR, relativeFile);
-  if (!fs.existsSync(filePath)) continue;
+for (const page of pages) {
+  for (const relativeFile of page.files) {
+    const filePath = path.join(DIST_DIR, relativeFile);
+    if (!fs.existsSync(filePath)) continue;
 
-  let html = fs.readFileSync(filePath, 'utf8');
-  html = html
-    .replace(/<main id="seo-content"[\s\S]*?<\/main>/, '')
-    .replace(/<style id="seo-content-style">[\s\S]*?<\/style>/, '')
-    .replace(/<script id="seo-content-hydration-guard">[\s\S]*?<\/script>/, '');
+    let html = fs.readFileSync(filePath, 'utf8');
+    html = html
+      .replace(/<main id="seo-content"[\s\S]*?<\/main>/, '')
+      .replace(/<style id="seo-content-style">[\s\S]*?<\/style>/, '')
+      .replace(/<script id="seo-content-hydration-guard">[\s\S]*?<\/script>/, '');
 
-  if (!html.includes('<div id="root"')) {
-    throw new Error(`Could not find root element in ${relativeFile}`);
+    if (!html.includes('<div id="root"')) {
+      throw new Error(`Could not find root element in ${relativeFile}`);
+    }
+
+    html = html.replace('</head>', `${seoStyle}</head>`);
+    html = html.replace('<div id="root"', `${page.html}<div id="root"`);
+    html = html.replace('</body>', `${hideAfterHydrationScript}</body>`);
+    fs.writeFileSync(filePath, html, 'utf8');
+    console.log(`Injected semantic SEO HTML into ${relativeFile}`);
   }
-
-  html = html.replace('</head>', `${seoStyle}</head>`);
-  html = html.replace('<div id="root"', `${seoBlock}<div id="root"`);
-  html = html.replace('</body>', `${hideAfterHydrationScript}</body>`);
-  fs.writeFileSync(filePath, html, 'utf8');
-  console.log(`Injected semantic SEO HTML into ${relativeFile}`);
 }

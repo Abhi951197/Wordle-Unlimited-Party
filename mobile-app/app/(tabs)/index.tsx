@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'expo-router';
 import {
   ActivityIndicator,
   Modal,
@@ -609,6 +610,13 @@ export default function GameScreen() {
               <Text style={styles.seoText}>
                 Is it free? Yes. Do I need an account? No. Can I play with friends? Yes, create a party room and share the link or room code.
               </Text>
+              <View style={styles.seoLinkRow}>
+                <Link href={'/how-to-play' as never} style={styles.seoLink}>How to Play</Link>
+                <Link href={'/features' as never} style={styles.seoLink}>Features</Link>
+                <Link href={'/privacy' as never} style={styles.seoLink}>Privacy</Link>
+                <Link href={'/terms' as never} style={styles.seoLink}>Terms</Link>
+                <Link href={'/contact' as never} style={styles.seoLink}>Contact</Link>
+              </View>
             </View>
           </ScrollView>
         )}
@@ -1143,6 +1151,8 @@ const styles = StyleSheet.create({
   seoTitle: { color: '#F8FAFC', fontSize: 18, fontWeight: '900' },
   seoSubtitle: { color: '#16C75A', fontSize: 13, fontWeight: '900', textTransform: 'uppercase', marginTop: 8 },
   seoText: { color: '#CBD5E1', fontSize: 13, lineHeight: 19, fontWeight: '700' },
+  seoLinkRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
+  seoLink: { color: '#60A5FA', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
   difficultyList: { gap: 10, marginTop: 12 },
   diffCard: { minHeight: 76, borderRadius: 16, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
   diffBadge: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
