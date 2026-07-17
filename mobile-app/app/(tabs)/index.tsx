@@ -22,7 +22,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
 import { WordGrid } from '@/components/WordGrid';
-import { ActiveBoard, AnswerInfo, ChatMessage, HintState, LeaderboardEntry, LeaderboardResponse, useGameState } from '@/store/GameState';
+import { AchievementProgress, ActiveBoard, AnswerInfo, ChatMessage, HintState, LeaderboardEntry, LeaderboardResponse, PublicProfile, PublicStatsScope, useGameState } from '@/store/GameState';
 import { trackEvent } from '@/utils/analytics';
 
 const DIFF_META: Record<string, { color: string; label: string; desc: string; guesses: string; mark: string }> = {
@@ -36,6 +36,7 @@ type AppView = 'splash' | 'mode' | 'difficulty' | 'party' | 'roomCreated' | 'sol
 type PlayMode = 'solo' | 'party';
 type StatsTab = 'overall' | 'easy' | 'moderate' | 'difficult' | 'prodigy';
 type LeaderboardTab = StatsTab | 'rules';
+type LeaderboardPeriod = 'weekly' | 'all_time';
 
 interface RecentRoom {
   roomId: string;
@@ -88,7 +89,7 @@ const ToastBanner: React.FC<{ message: string; type: 'error' | 'warning' | 'info
 export default function GameScreen() {
   const {
     startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, changeRoomDifficulty,
-    registerLeaderboardProfile, checkUsername, fetchLeaderboard, leaderboardProfile,
+    registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile, leaderboardProfile,
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
     sessionId, difficulty, roomId, playerId, playerEmoji, roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard,
@@ -114,8 +115,13 @@ export default function GameScreen() {
   const [leaderboardModal, setLeaderboardModal] = useState(false);
   const [profileModal, setProfileModal] = useState(false);
   const [leaderboardTab, setLeaderboardTab] = useState<LeaderboardTab>('overall');
+  const [leaderboardPeriod, setLeaderboardPeriod] = useState<LeaderboardPeriod>('weekly');
   const [leaderboardData, setLeaderboardData] = useState<LeaderboardResponse | null>(null);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [publicProfileModal, setPublicProfileModal] = useState(false);
+  const [publicProfile, setPublicProfile] = useState<PublicProfile | null>(null);
+  const [publicProfileLoading, setPublicProfileLoading] = useState(false);
+  const [publicProfileTab, setPublicProfileTab] = useState<StatsTab>('overall');
   const [usernameInput, setUsernameInput] = useState('');
   const [usernameStatus, setUsernameStatus] = useState('');
   const [seenChatId, setSeenChatId] = useState<string | null>(null);
@@ -283,18 +289,34 @@ export default function GameScreen() {
     }
   };
 
-  const refreshLeaderboard = async (scope: LeaderboardTab = leaderboardTab) => {
+  const refreshLeaderboard = async (scope: LeaderboardTab = leaderboardTab, period: LeaderboardPeriod = leaderboardPeriod) => {
     if (scope === 'rules') return;
     setLeaderboardLoading(true);
-    const data = await fetchLeaderboard(scope);
+    const data = await fetchLeaderboard(scope, period);
     setLeaderboardData(data);
     setLeaderboardLoading(false);
   };
 
-  const openLeaderboard = async (scope: LeaderboardTab = 'overall') => {
+  const openLeaderboard = async (scope: LeaderboardTab = 'overall', period: LeaderboardPeriod = leaderboardPeriod) => {
     setLeaderboardTab(scope);
+    setLeaderboardPeriod(period);
     setLeaderboardModal(true);
-    if (scope !== 'rules') await refreshLeaderboard(scope);
+    if (scope !== 'rules') await refreshLeaderboard(scope, period);
+  };
+
+  const selectLeaderboardPeriod = async (period: LeaderboardPeriod) => {
+    setLeaderboardPeriod(period);
+    if (leaderboardTab !== 'rules') await refreshLeaderboard(leaderboardTab, period);
+  };
+
+  const openPublicProfile = async (entry: LeaderboardEntry) => {
+    setPublicProfileModal(true);
+    setPublicProfileLoading(true);
+    setPublicProfileTab('overall');
+    setPublicProfile(null);
+    const profile = await fetchPublicProfile(entry.user_id);
+    setPublicProfile(profile);
+    setPublicProfileLoading(false);
   };
 
   const saveLeaderboardProfile = async () => {
@@ -955,15 +977,26 @@ export default function GameScreen() {
             <View style={styles.sheetHeader}>
               <View>
                 <Text style={[styles.sheetTitle, themed.titleText]}>Leaderboard</Text>
-                <Text style={[styles.topSubtitle, themed.mutedText]}>{leaderboardProfile ? `${leaderboardProfile.emoji} ${leaderboardProfile.username}` : 'Guest games are not ranked'}</Text>
+                <Text style={[styles.topSubtitle, themed.mutedText]}>
+                  {leaderboardPeriod === 'weekly'
+                    ? `This week${leaderboardData?.resets_at ? ` · resets ${formatShortDate(leaderboardData.resets_at)}` : ''}`
+                    : 'All-time rankings'}
+                </Text>
               </View>
               <TouchableOpacity style={[styles.closeIconBtn, themed.iconBtn]} onPress={() => setLeaderboardModal(false)}>
                 <IconMark name="x" color={palette.text} />
               </TouchableOpacity>
             </View>
+            <View style={styles.periodToggle}>
+              {(['weekly', 'all_time'] as LeaderboardPeriod[]).map(period => (
+                <TouchableOpacity key={period} style={[styles.periodPill, leaderboardPeriod === period && styles.periodPillActive]} onPress={() => selectLeaderboardPeriod(period)}>
+                  <Text style={[styles.periodPillText, leaderboardPeriod === period && styles.periodPillTextActive]}>{period === 'weekly' ? 'This Week' : 'All Time'}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
             <View style={styles.leaderboardTabs}>
               {(['overall', 'easy', 'moderate', 'difficult', 'prodigy', 'rules'] as LeaderboardTab[]).map(tab => (
-                <TouchableOpacity key={tab} style={[styles.leaderboardTab, leaderboardTab === tab && styles.leaderboardTabActive]} onPress={() => { setLeaderboardTab(tab); if (tab !== 'rules') refreshLeaderboard(tab); }}>
+                <TouchableOpacity key={tab} style={[styles.leaderboardTab, leaderboardTab === tab && styles.leaderboardTabActive]} onPress={() => { setLeaderboardTab(tab); if (tab !== 'rules') refreshLeaderboard(tab, leaderboardPeriod); }}>
                   <Text style={[styles.leaderboardTabText, leaderboardTab === tab && styles.leaderboardTabTextActive]}>{tab}</Text>
                 </TouchableOpacity>
               ))}
@@ -985,13 +1018,54 @@ export default function GameScreen() {
             ) : (
               <ScrollView style={styles.leaderboardList} contentContainerStyle={styles.leaderboardListContent}>
                 {leaderboardData?.current_user && !leaderboardData.entries.some(entry => entry.user_id === leaderboardData.current_user?.user_id) && (
-                  <LeaderboardRow entry={leaderboardData.current_user} current />
+                  <LeaderboardRow entry={leaderboardData.current_user} current onPress={openPublicProfile} />
                 )}
                 {(leaderboardData?.entries ?? []).map(entry => (
-                  <LeaderboardRow key={entry.user_id} entry={entry} current={entry.user_id === leaderboardProfile?.user_id} />
+                  <LeaderboardRow key={entry.user_id} entry={entry} current={entry.user_id === leaderboardProfile?.user_id} onPress={openPublicProfile} />
                 ))}
                 {!leaderboardData?.entries?.length && <Text style={styles.hintEmptyText}>No ranked games yet. Finish a puzzle to appear here.</Text>}
               </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={publicProfileModal} transparent animationType="slide" onRequestClose={() => setPublicProfileModal(false)}>
+        <View style={styles.centerModal}>
+          <View style={[styles.publicProfileCard, themed.card]}>
+            <View style={styles.sheetHeader}>
+              <View style={styles.publicProfileHeader}>
+                <Text style={styles.publicProfileEmoji}>{publicProfile?.player.emoji || '🙂'}</Text>
+                <View>
+                  <Text style={[styles.sheetTitle, themed.titleText]}>{publicProfile?.player.username || 'Loading player'}</Text>
+                  <Text style={[styles.topSubtitle, themed.mutedText]}>
+                    Week #{publicProfile?.ranks.weekly ?? '-'} · All-time #{publicProfile?.ranks.all_time ?? '-'}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity style={[styles.closeIconBtn, themed.iconBtn]} onPress={() => setPublicProfileModal(false)}>
+                <IconMark name="x" color={palette.text} />
+              </TouchableOpacity>
+            </View>
+            {publicProfileLoading ? (
+              <View style={styles.boardLoading}><ActivityIndicator color="#16C75A" /><Text style={styles.boardLoadingText}>Loading profile...</Text></View>
+            ) : publicProfile ? (
+              <ScrollView style={styles.publicProfileScroll} contentContainerStyle={styles.publicProfileContent}>
+                <View style={styles.leaderboardTabs}>
+                  {(['overall', 'easy', 'moderate', 'difficult', 'prodigy'] as StatsTab[]).map(tab => (
+                    <TouchableOpacity key={tab} style={[styles.leaderboardTab, publicProfileTab === tab && styles.leaderboardTabActive]} onPress={() => setPublicProfileTab(tab)}>
+                      <Text style={[styles.leaderboardTabText, publicProfileTab === tab && styles.leaderboardTabTextActive]}>{tab}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <PublicStatsPanel stats={publicProfile.all_time[publicProfileTab]} weeklyStats={publicProfile.weekly[publicProfileTab]} />
+                <Text style={styles.achievementSectionTitle}>Achievements</Text>
+                <View style={styles.achievementList}>
+                  {publicProfile.achievements.map(item => <AchievementCard key={item.id} item={item} />)}
+                </View>
+              </ScrollView>
+            ) : (
+              <Text style={styles.hintEmptyText}>Profile stats are not available yet. Try again after the backend finishes redeploying.</Text>
             )}
           </View>
         </View>
@@ -1206,8 +1280,60 @@ const ChatBubble: React.FC<{ message: ChatMessage; mine: boolean }> = ({ message
   </View>
 );
 
-const LeaderboardRow: React.FC<{ entry: LeaderboardEntry; current?: boolean }> = ({ entry, current }) => (
-  <View style={[styles.leaderboardRow, current && styles.leaderboardRowCurrent]}>
+const formatShortDate = (value: string) => {
+  try {
+    return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  } catch {
+    return value;
+  }
+};
+
+const PublicStatsPanel: React.FC<{ stats?: PublicStatsScope; weeklyStats?: PublicStatsScope }> = ({ stats, weeklyStats }) => {
+  const source = stats ?? {
+    scope: 'overall', score: 0, games_played: 0, wins: 0, losses: 0, win_rate: 0,
+    current_streak: 0, max_streak: 0, total_guesses: 0, avg_guesses: null,
+    hint_games: 0, hint_wins: 0, guess_distribution: [0, 0, 0, 0, 0, 0],
+  };
+  const distribution = source.guess_distribution ?? [0, 0, 0, 0, 0, 0];
+  const max = Math.max(...distribution, 1);
+  return (
+    <View style={styles.publicStatsBox}>
+      <View style={styles.statsRow}>
+        <View style={styles.statBox}><Text style={styles.statValue}>{source.games_played}</Text><Text style={styles.statLabel}>Played</Text></View>
+        <View style={styles.statBox}><Text style={styles.statValue}>{source.win_rate}%</Text><Text style={styles.statLabel}>Win Rate</Text></View>
+        <View style={styles.statBox}><Text style={styles.statValue}>{source.current_streak}</Text><Text style={styles.statLabel}>Streak</Text></View>
+        <View style={styles.statBox}><Text style={styles.statValue}>{source.max_streak}</Text><Text style={styles.statLabel}>Best</Text></View>
+      </View>
+      <Text style={styles.avgLine}>Score {source.score} · This week {weeklyStats?.score ?? 0} · Avg guesses per win: {source.avg_guesses ?? '-'}</Text>
+      {distribution.map((count, index) => (
+        <View key={index} style={styles.distRow}>
+          <Text style={styles.distNum}>{index + 1}</Text>
+          <View style={[styles.distBar, { flex: count ? count / max : 0.08 }]}><Text style={styles.distCount}>{count}</Text></View>
+        </View>
+      ))}
+    </View>
+  );
+};
+
+const AchievementCard: React.FC<{ item: AchievementProgress }> = ({ item }) => {
+  const pct = Math.min(100, Math.round((item.current / Math.max(item.target, 1)) * 100));
+  return (
+    <View style={[styles.achievementCard, item.unlocked && styles.achievementUnlocked]}>
+      <Text style={styles.achievementIcon}>{item.icon}</Text>
+      <View style={styles.achievementCopy}>
+        <View style={styles.achievementTitleRow}>
+          <Text style={styles.achievementTitle}>{item.title}</Text>
+          <Text style={[styles.achievementStatus, item.unlocked && styles.achievementStatusUnlocked]}>{item.unlocked ? 'Unlocked' : `${item.current}/${item.target}`}</Text>
+        </View>
+        <Text style={styles.achievementDesc}>{item.description}</Text>
+        <View style={styles.achievementTrack}><View style={[styles.achievementFill, { width: `${pct}%` }]} /></View>
+      </View>
+    </View>
+  );
+};
+
+const LeaderboardRow: React.FC<{ entry: LeaderboardEntry; current?: boolean; onPress?: (entry: LeaderboardEntry) => void }> = ({ entry, current, onPress }) => (
+  <TouchableOpacity style={[styles.leaderboardRow, current && styles.leaderboardRowCurrent]} onPress={() => onPress?.(entry)} activeOpacity={0.82}>
     <Text style={styles.leaderRank}>#{entry.rank}</Text>
     <Text style={styles.leaderEmoji}>{entry.emoji || '🙂'}</Text>
     <View style={styles.leaderNameWrap}>
@@ -1218,7 +1344,7 @@ const LeaderboardRow: React.FC<{ entry: LeaderboardEntry; current?: boolean }> =
       <Text style={styles.leaderScore}>{entry.score}</Text>
       <Text style={styles.leaderAvg}>{entry.avg_guesses ? `${entry.avg_guesses} avg` : 'no avg'}</Text>
     </View>
-  </View>
+  </TouchableOpacity>
 );
 
 const IconMark: React.FC<{ name: 'dots' | 'info' | 'x' | 'chat' | 'share' | 'send'; color: string }> = ({ name, color }) => {
@@ -1563,6 +1689,17 @@ const styles = StyleSheet.create({
   exampleLetter: { color: '#fff', fontWeight: '900', fontSize: 18 },
   menuCard: { width: '100%', maxWidth: 390, borderRadius: 24, backgroundColor: '#151C27', borderWidth: 1, borderColor: '#283447', padding: 14, gap: 8 },
   leaderboardCard: { width: '100%', maxWidth: 720, maxHeight: '88%', borderRadius: 24, backgroundColor: '#151C27', borderWidth: 1, borderColor: '#283447', padding: 14, gap: 10 },
+  publicProfileCard: { width: '100%', maxWidth: 620, maxHeight: '88%', borderRadius: 24, backgroundColor: '#151C27', borderWidth: 1, borderColor: '#283447', padding: 14, gap: 10 },
+  publicProfileHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  publicProfileEmoji: { fontSize: 34, width: 42, textAlign: 'center' },
+  publicProfileScroll: { maxHeight: 560 },
+  publicProfileContent: { gap: 12, paddingBottom: 6 },
+  publicStatsBox: { borderRadius: 18, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', padding: 14 },
+  periodToggle: { flexDirection: 'row', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 14, padding: 4, gap: 4 },
+  periodPill: { flex: 1, minHeight: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  periodPillActive: { backgroundColor: '#16C75A' },
+  periodPillText: { color: '#9CA3AF', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  periodPillTextActive: { color: '#FFFFFF' },
   leaderboardTabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   leaderboardTab: { minHeight: 32, borderRadius: 10, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
   leaderboardTabActive: { borderColor: '#FACC15', backgroundColor: '#2A2108' },
@@ -1580,6 +1717,20 @@ const styles = StyleSheet.create({
   leaderScoreWrap: { alignItems: 'flex-end', minWidth: 58 },
   leaderScore: { color: '#16C75A', fontSize: 18, fontWeight: '900' },
   leaderAvg: { color: '#9CA3AF', fontSize: 10, fontWeight: '800' },
+  leaderBadges: { color: '#FDE68A', fontSize: 10, fontWeight: '800', marginTop: 2 },
+  achievementSectionTitle: { color: '#F8FAFC', fontSize: 16, fontWeight: '900', marginTop: 4 },
+  achievementList: { gap: 8 },
+  achievementCard: { minHeight: 72, borderRadius: 16, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  achievementUnlocked: { borderColor: '#16C75A', backgroundColor: '#10251A' },
+  achievementIcon: { width: 34, fontSize: 24, textAlign: 'center' },
+  achievementCopy: { flex: 1, minWidth: 0, gap: 5 },
+  achievementTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  achievementTitle: { color: '#F8FAFC', fontSize: 13, fontWeight: '900', flex: 1 },
+  achievementStatus: { color: '#9CA3AF', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+  achievementStatusUnlocked: { color: '#16C75A' },
+  achievementDesc: { color: '#9CA3AF', fontSize: 11, fontWeight: '700', lineHeight: 15 },
+  achievementTrack: { height: 6, borderRadius: 999, backgroundColor: '#283447', overflow: 'hidden' },
+  achievementFill: { height: '100%', borderRadius: 999, backgroundColor: '#16C75A' },
   rulesBox: { borderRadius: 18, borderWidth: 1, borderColor: '#FACC15', backgroundColor: '#2A2108', padding: 14, gap: 8 },
   ruleTitle: { color: '#FDE68A', fontSize: 18, fontWeight: '900' },
   ruleText: { color: '#FFF7C2', fontSize: 13, fontWeight: '800', lineHeight: 19 },

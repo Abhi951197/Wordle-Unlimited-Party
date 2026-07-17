@@ -120,13 +120,58 @@ export interface LeaderboardEntry {
   avg_guesses?: number | null;
   hint_games: number;
   hint_wins: number;
+  total_guesses?: number;
+  guess_distribution?: number[];
+  badges?: AchievementProgress[];
 }
 
 export interface LeaderboardResponse {
   scope: string;
+  period?: 'weekly' | 'all_time';
+  period_key?: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
+  resets_at?: string | null;
   entries: LeaderboardEntry[];
   current_user?: LeaderboardEntry | null;
   scoring: Record<string, unknown>;
+}
+
+export interface PublicStatsScope {
+  scope: string;
+  score: number;
+  games_played: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  current_streak: number;
+  max_streak: number;
+  total_guesses: number;
+  avg_guesses?: number | null;
+  hint_games: number;
+  hint_wins: number;
+  guess_distribution: number[];
+}
+
+export interface AchievementProgress {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  target: number;
+  current: number;
+  unlocked: boolean;
+  unlocked_at?: string | null;
+  period_key?: string | null;
+}
+
+export interface PublicProfile {
+  player: { user_id: string; username: string; emoji: string; created_at: string };
+  period: { period_key: string; period_start: string; period_end: string; resets_at: string };
+  ranks: { weekly?: number | null; all_time?: number | null };
+  all_time: Record<string, PublicStatsScope>;
+  weekly: Record<string, PublicStatsScope>;
+  achievements: AchievementProgress[];
 }
 
 interface GameStateContextType {
@@ -159,7 +204,8 @@ interface GameStateContextType {
   joinRoom: (roomId: string, playerName: string, playerEmoji?: string) => Promise<boolean>;
   registerLeaderboardProfile: (username: string, emoji?: string) => Promise<boolean>;
   checkUsername: (username: string) => Promise<{ available: boolean; valid: boolean; message?: string | null }>;
-  fetchLeaderboard: (scope?: string) => Promise<LeaderboardResponse | null>;
+  fetchLeaderboard: (scope?: string, period?: 'weekly' | 'all_time') => Promise<LeaderboardResponse | null>;
+  fetchPublicProfile: (userId: string) => Promise<PublicProfile | null>;
   leaveRoom: (options?: { forgetIdentity?: boolean }) => void;
   createSharedGame: () => Promise<void>;
   createIndividualGame: () => Promise<void>;
@@ -428,14 +474,25 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  const fetchLeaderboard = async (scope = 'overall') => {
+  const fetchLeaderboard = async (scope = 'overall', period: 'weekly' | 'all_time' = 'weekly') => {
     try {
       const current = leaderboardProfile?.user_id ? `&player_id=${encodeURIComponent(leaderboardProfile.user_id)}` : '';
-      const res = await fetch(`${API_URL}/leaderboard?scope=${encodeURIComponent(scope)}&limit=50${current}`);
+      const res = await fetch(`${API_URL}/leaderboard?scope=${encodeURIComponent(scope)}&period=${encodeURIComponent(period)}&limit=50${current}`);
       if (!res.ok) throw new Error('leaderboard');
       return await res.json();
     } catch {
       showToast('Could not load leaderboard', 'warning');
+      return null;
+    }
+  };
+
+  const fetchPublicProfile = async (userId: string) => {
+    try {
+      const res = await fetch(`${API_URL}/players/${encodeURIComponent(userId)}/public-profile`);
+      if (!res.ok) throw new Error('profile');
+      return await res.json();
+    } catch {
+      showToast('Could not load public profile', 'warning');
       return null;
     }
   };
@@ -1036,7 +1093,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard, sharedBoard, individualBoard, shareRequest, chatMessages,
       guesses, results, currentGuess, gameStatus, letterStates, stats,
       startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
-      registerLeaderboardProfile, checkUsername, fetchLeaderboard,
+      registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile,
       changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, sendChatMessage, addLetter, removeLetter,
       submitGuess, getHint, hints, hintsUsed, invalidShake, lastSubmittedRow,
       answer, answerInfo, maxGuesses, toast,

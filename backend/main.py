@@ -14,6 +14,7 @@ from word_metadata import get_word_metadata, validate_metadata_coverage
 from leaderboard import (
     init_db,
     leaderboard as get_leaderboard,
+    public_profile as get_public_profile,
     record_result,
     register_player,
     username_available,
@@ -233,12 +234,28 @@ class LeaderboardEntry(BaseModel):
     avg_guesses: float | None = None
     hint_games: int = 0
     hint_wins: int = 0
+    total_guesses: int = 0
+    guess_distribution: list[int] = [0, 0, 0, 0, 0, 0]
+    badges: list[dict[str, Any]] = []
 
 class LeaderboardResponse(BaseModel):
     scope: str
+    period: str = "weekly"
+    period_key: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
+    resets_at: str | None = None
     entries: list[LeaderboardEntry]
     current_user: LeaderboardEntry | None = None
     scoring: dict[str, Any]
+
+class PublicProfileResponse(BaseModel):
+    player: dict[str, Any]
+    period: dict[str, Any]
+    ranks: dict[str, int | None]
+    all_time: dict[str, dict[str, Any]]
+    weekly: dict[str, dict[str, Any]]
+    achievements: list[dict[str, Any]]
 
 @app.get("/")
 def read_root():
@@ -274,9 +291,16 @@ def check_public_username(username: str):
         return UsernameAvailabilityResponse(username=username.strip().lower(), available=False, valid=False, message=str(exc))
 
 @app.get("/leaderboard", response_model=LeaderboardResponse)
-def read_leaderboard(scope: str = "overall", limit: int = 50, player_id: str | None = None):
-    data = get_leaderboard(scope, limit, player_id)
+def read_leaderboard(scope: str = "overall", limit: int = 50, player_id: str | None = None, period: str = "weekly", week: str = "current"):
+    data = get_leaderboard(scope, limit, player_id, period, week)
     return LeaderboardResponse(**data, scoring=_scoring_rules())
+
+@app.get("/players/{user_id}/public-profile", response_model=PublicProfileResponse)
+def read_public_profile(user_id: str):
+    profile = get_public_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return PublicProfileResponse(**profile)
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -342,6 +366,8 @@ def _create_session(difficulty: str) -> str:
         "game_over": False,
         "won": False,
         "leaderboard_participants": {},
+        "leaderboard_mode": "solo",
+        "leaderboard_shared_board": False,
         "typing_player_id": None,
         "typing_player_name": None,
         "typing_player_emoji": None,
@@ -531,6 +557,7 @@ def _require_room_player(room_id: str, player_id: str) -> dict[str, Any]:
 def _active_session_id(room: dict[str, Any], player_id: str) -> str:
     if player_id not in room["player_sessions"]:
         room["player_sessions"][player_id] = _create_session(room.get("difficulty", "easy"))
+        _mark_session_leaderboard_context(room["player_sessions"][player_id], "party", False)
 
     active_board = room["player_active_boards"].get(player_id, "shared")
     if active_board == "individual":
@@ -547,6 +574,12 @@ def _mark_session_participant(session_id: str, leaderboard_user_id: str | None, 
     if not leaderboard_user_id or not leaderboard_token or session_id not in sessions:
         return
     sessions[session_id].setdefault("leaderboard_participants", {})[leaderboard_user_id] = leaderboard_token
+
+def _mark_session_leaderboard_context(session_id: str, mode: str, shared_board: bool = False) -> None:
+    if session_id not in sessions:
+        return
+    sessions[session_id]["leaderboard_mode"] = mode
+    sessions[session_id]["leaderboard_shared_board"] = shared_board
 
 def _record_session_results(session_id: str, only_user_id: str | None = None, only_token: str | None = None) -> None:
     if session_id not in sessions:
@@ -566,6 +599,8 @@ def _record_session_results(session_id: str, only_user_id: str | None = None, on
             won=bool(session.get("won")),
             guesses=len(session.get("guesses", [])),
             hints_used=int(session.get("hints_used", 0)),
+            mode=session.get("leaderboard_mode", "solo"),
+            shared_board=bool(session.get("leaderboard_shared_board")),
         )
 
 def _submit_guess_to_session(session_id: str, guess: str) -> GuessResponse:
@@ -637,6 +672,8 @@ def create_room(req: RoomCreateRequest):
     player_emoji = _clean_player_emoji(req.player_emoji)
     shared_session_id = _create_session(req.difficulty)
     individual_session_id = _create_session(req.difficulty)
+    _mark_session_leaderboard_context(shared_session_id, "party", True)
+    _mark_session_leaderboard_context(individual_session_id, "party", False)
     rooms[room_id] = {
         "room_id": room_id,
         "host_player_id": player_id,
@@ -678,6 +715,7 @@ def join_room(room_id: str, req: RoomJoinRequest):
         raise HTTPException(status_code=409, detail="Room is full")
     if player_id not in rooms[room_id]["player_sessions"]:
         rooms[room_id]["player_sessions"][player_id] = _create_session(rooms[room_id].get("difficulty", "easy"))
+        _mark_session_leaderboard_context(rooms[room_id]["player_sessions"][player_id], "party", False)
     rooms[room_id]["player_active_boards"].setdefault(player_id, "shared")
     rooms[room_id]["players"][player_id] = {
         "player_id": player_id,
@@ -750,6 +788,7 @@ def create_shared_game(room_id: str, req: PlayerRequest):
     room = _require_room_player(room_id, req.player_id or "")
     difficulty = room.get("difficulty", "easy")
     room["active_shared_session_id"] = _create_session(difficulty)
+    _mark_session_leaderboard_context(room["active_shared_session_id"], "party", True)
     room["share_request"] = None
     for player_id in room["players"]:
         room["player_active_boards"][player_id] = "shared"
@@ -762,6 +801,7 @@ def create_individual_game(room_id: str, req: PlayerRequest):
     room = _require_room_player(room_id, req.player_id or "")
     difficulty = room.get("difficulty", "easy")
     room["player_sessions"][req.player_id] = _create_session(difficulty)
+    _mark_session_leaderboard_context(room["player_sessions"][req.player_id], "party", False)
     room["player_active_boards"][req.player_id] = "individual"
     _touch_room(room, req.player_id)
     return _room_state(room_id, req.player_id)
@@ -773,9 +813,11 @@ def change_room_difficulty(room_id: str, req: RoomDifficultyRequest):
     difficulty = req.difficulty.strip().lower()
     room["difficulty"] = difficulty
     room["active_shared_session_id"] = _create_session(difficulty)
+    _mark_session_leaderboard_context(room["active_shared_session_id"], "party", True)
     room["share_request"] = None
     for player_id in room["players"]:
         room["player_sessions"][player_id] = _create_session(difficulty)
+        _mark_session_leaderboard_context(room["player_sessions"][player_id], "party", False)
         room["player_active_boards"][player_id] = "shared"
     _touch_room(room, req.player_id)
     return _room_state(room_id, req.player_id)
@@ -788,8 +830,10 @@ def set_active_board(room_id: str, req: ActiveBoardRequest):
         raise HTTPException(status_code=400, detail="Board must be shared or individual")
     if req.board == "shared" and not room.get("active_shared_session_id"):
         room["active_shared_session_id"] = _create_session(room.get("difficulty", "easy"))
+        _mark_session_leaderboard_context(room["active_shared_session_id"], "party", True)
     if req.board == "individual" and req.player_id not in room["player_sessions"]:
         room["player_sessions"][req.player_id] = _create_session(room.get("difficulty", "easy"))
+        _mark_session_leaderboard_context(room["player_sessions"][req.player_id], "party", False)
     room["player_active_boards"][req.player_id] = req.board
     _touch_room(room, req.player_id)
     return _room_state(room_id, req.player_id)
@@ -800,6 +844,7 @@ def create_share_request(room_id: str, req: ShareRequestCreate):
     room = _require_room_player(room_id, req.player_id)
     if req.player_id not in room["player_sessions"]:
         room["player_sessions"][req.player_id] = _create_session(room.get("difficulty", "easy"))
+        _mark_session_leaderboard_context(room["player_sessions"][req.player_id], "party", False)
     room["share_request"] = ShareRequestState(
         from_player_id=req.player_id,
         from_player_name=room["players"][req.player_id]["player_name"],
@@ -819,6 +864,7 @@ def respond_share_request(room_id: str, req: ShareRequestRespond):
 
     if req.accept:
         room["active_shared_session_id"] = share_request.session_id
+        _mark_session_leaderboard_context(room["active_shared_session_id"], "party", True)
         for player_id in room["players"]:
             room["player_active_boards"][player_id] = "shared"
     room["share_request"] = None

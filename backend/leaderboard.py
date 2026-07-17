@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 import hashlib
@@ -24,6 +24,24 @@ SQLITE_PATH = Path(__file__).resolve().parent / "leaderboard.db"
 SCOPES = ("overall", "easy", "moderate", "difficult", "prodigy")
 DIFFICULTY_POINTS = {"easy": 100, "moderate": 140, "difficult": 180, "prodigy": 250}
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{3,16}$")
+ALL_TIME_KEY = "all"
+PERIOD_TYPES = ("weekly", "all_time")
+
+ACHIEVEMENTS = [
+    {"id": "first_win", "title": "First Win", "description": "Win your first puzzle.", "icon": "🏆", "target": 1},
+    {"id": "sharp_solver", "title": "Sharp Solver", "description": "Win in 3 guesses or fewer.", "icon": "🎯", "target": 1},
+    {"id": "no_hint_victory", "title": "No-Hint Victory", "description": "Win without using hints.", "icon": "✨", "target": 1},
+    {"id": "streak_3", "title": "Streak 3", "description": "Win 3 games in a row.", "icon": "🔥", "target": 3},
+    {"id": "streak_10", "title": "Streak 10", "description": "Win 10 games in a row.", "icon": "⚡", "target": 10},
+    {"id": "easy_specialist", "title": "Easy Specialist", "description": "Win 10 Easy games.", "icon": "🟢", "target": 10},
+    {"id": "moderate_master", "title": "Moderate Master", "description": "Win 10 Moderate games.", "icon": "🟡", "target": 10},
+    {"id": "difficult_dominator", "title": "Difficult Dominator", "description": "Win 10 Difficult games.", "icon": "🔴", "target": 10},
+    {"id": "prodigy_solver", "title": "Prodigy Solver", "description": "Win 5 Prodigy games.", "icon": "🟣", "target": 5},
+    {"id": "party_player", "title": "Party Player", "description": "Complete 5 party games.", "icon": "🎉", "target": 5},
+    {"id": "team_solver", "title": "Team Solver", "description": "Win a shared party board.", "icon": "🤝", "target": 1},
+    {"id": "weekly_top_10", "title": "Weekly Top 10", "description": "Finish a week in the top 10.", "icon": "⭐", "target": 1},
+    {"id": "weekly_champion", "title": "Weekly Champion", "description": "Finish a week ranked #1.", "icon": "👑", "target": 1},
+]
 
 
 def _using_postgres() -> bool:
@@ -32,6 +50,34 @@ def _using_postgres() -> bool:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(timezone.utc)
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _week_bounds(moment: datetime | None = None) -> tuple[str, datetime, datetime]:
+    moment = moment or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    iso = moment.isocalendar()
+    start = moment - timedelta(days=iso.weekday - 1, hours=moment.hour, minutes=moment.minute, seconds=moment.second, microseconds=moment.microsecond)
+    end = start + timedelta(days=7)
+    return f"{iso.year}-W{iso.week:02d}", start, end
+
+
+def _week_bounds_from_key(period_key: str) -> tuple[str, datetime, datetime]:
+    if period_key == "current":
+        return _week_bounds()
+    match = re.match(r"^(\d{4})-W(\d{2})$", period_key or "")
+    if not match:
+        return _week_bounds()
+    year, week = int(match.group(1)), int(match.group(2))
+    start = datetime.fromisocalendar(year, week, 1).replace(tzinfo=timezone.utc)
+    return f"{year}-W{week:02d}", start, start + timedelta(days=7)
 
 
 def _hash_token(token: str) -> str:
@@ -74,6 +120,18 @@ def _row_to_dict(row: Any) -> dict[str, Any] | None:
     if row is None:
         return None
     return dict(row)
+
+
+def _table_columns(conn, table: str) -> set[str]:
+    if _using_postgres():
+        rows = _execute(conn, "SELECT column_name FROM information_schema.columns WHERE table_name = ?", (table,)).fetchall()
+        return {row["column_name"] if isinstance(row, dict) else row[0] for row in rows}
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _add_column(conn, table: str, column: str, definition: str) -> None:
+    if column not in _table_columns(conn, table):
+        _execute(conn, f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def init_db() -> None:
@@ -160,6 +218,46 @@ def init_db() -> None:
                     PRIMARY KEY (session_id, user_id, scope)
                 );
             """)
+        for index in range(1, 7):
+            _add_column(conn, "player_stats", f"guess_{index}", "INTEGER NOT NULL DEFAULT 0")
+        _add_column(conn, "game_results", "mode", "TEXT NOT NULL DEFAULT 'solo'")
+        _add_column(conn, "game_results", "shared_board", "INTEGER NOT NULL DEFAULT 0")
+        _execute(conn, """
+            CREATE TABLE IF NOT EXISTS player_period_stats (
+                user_id TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                period_type TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                score INTEGER NOT NULL DEFAULT 0,
+                games_played INTEGER NOT NULL DEFAULT 0,
+                wins INTEGER NOT NULL DEFAULT 0,
+                losses INTEGER NOT NULL DEFAULT 0,
+                current_streak INTEGER NOT NULL DEFAULT 0,
+                max_streak INTEGER NOT NULL DEFAULT 0,
+                total_guesses INTEGER NOT NULL DEFAULT 0,
+                hint_games INTEGER NOT NULL DEFAULT 0,
+                hint_wins INTEGER NOT NULL DEFAULT 0,
+                guess_1 INTEGER NOT NULL DEFAULT 0,
+                guess_2 INTEGER NOT NULL DEFAULT 0,
+                guess_3 INTEGER NOT NULL DEFAULT 0,
+                guess_4 INTEGER NOT NULL DEFAULT 0,
+                guess_5 INTEGER NOT NULL DEFAULT 0,
+                guess_6 INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, scope, period_type, period_key),
+                FOREIGN KEY (user_id) REFERENCES players(user_id)
+            )
+        """)
+        _execute(conn, """
+            CREATE TABLE IF NOT EXISTS player_achievements (
+                user_id TEXT NOT NULL,
+                achievement_id TEXT NOT NULL,
+                period_key TEXT NOT NULL DEFAULT '',
+                unlocked_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, achievement_id, period_key),
+                FOREIGN KEY (user_id) REFERENCES players(user_id)
+            )
+        """)
 
 
 def username_available(username: str) -> bool:
@@ -213,64 +311,175 @@ def score_for_game(difficulty: str, won: bool, guesses: int, hints_used: int) ->
     return max(DIFFICULTY_POINTS.get(difficulty, 100) + (10 * remaining) + (15 if hints_used == 0 else 0) - (10 * hints_used), 0)
 
 
-def record_result(session_id: str, user_id: str | None, token: str | None, difficulty: str, won: bool, guesses: int, hints_used: int) -> bool:
+def _stat_update_values(current: dict[str, Any] | None, won: bool, guesses: int, hints_used: int) -> tuple[int, int]:
+    current = current or {}
+    next_streak = int(current.get("current_streak") or 0) + 1 if won else 0
+    next_max = max(int(current.get("max_streak") or 0), next_streak)
+    return next_streak, next_max
+
+
+def _update_player_stats(conn, user_id: str, scope: str, score_delta: int, won: bool, guesses: int, hints_used: int, now: str) -> None:
+    current = _row_to_dict(_execute(conn, "SELECT * FROM player_stats WHERE user_id = ? AND scope = ?", (user_id, scope)).fetchone())
+    if not current:
+        _execute(conn, "INSERT INTO player_stats (user_id, scope, updated_at) VALUES (?, ?, ?)", (user_id, scope, now))
+        current = {}
+    next_streak, next_max = _stat_update_values(current, won, guesses, hints_used)
+    guess_column = f"guess_{max(1, min(guesses, 6))}" if won else None
+    guess_sql = f", {guess_column} = {guess_column} + 1" if guess_column else ""
+    _execute(
+        conn,
+        f"""
+        UPDATE player_stats
+        SET score = score + ?,
+            games_played = games_played + 1,
+            wins = wins + ?,
+            losses = losses + ?,
+            current_streak = ?,
+            max_streak = ?,
+            total_guesses = total_guesses + ?,
+            hint_games = hint_games + ?,
+            hint_wins = hint_wins + ?,
+            updated_at = ?
+            {guess_sql}
+        WHERE user_id = ? AND scope = ?
+        """,
+        (
+            score_delta,
+            1 if won else 0,
+            0 if won else 1,
+            next_streak,
+            next_max,
+            guesses if won else 0,
+            1 if hints_used > 0 else 0,
+            1 if won and hints_used > 0 else 0,
+            now,
+            user_id,
+            scope,
+        ),
+    )
+
+
+def _update_period_stats(conn, user_id: str, scope: str, period_type: str, period_key: str, score_delta: int, won: bool, guesses: int, hints_used: int, now: str) -> None:
+    current = _row_to_dict(_execute(
+        conn,
+        "SELECT * FROM player_period_stats WHERE user_id = ? AND scope = ? AND period_type = ? AND period_key = ?",
+        (user_id, scope, period_type, period_key),
+    ).fetchone())
+    if not current:
+        _execute(
+            conn,
+            "INSERT INTO player_period_stats (user_id, scope, period_type, period_key, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, scope, period_type, period_key, now),
+        )
+        current = {}
+    next_streak, next_max = _stat_update_values(current, won, guesses, hints_used)
+    guess_column = f"guess_{max(1, min(guesses, 6))}" if won else None
+    guess_sql = f", {guess_column} = {guess_column} + 1" if guess_column else ""
+    _execute(
+        conn,
+        f"""
+        UPDATE player_period_stats
+        SET score = score + ?,
+            games_played = games_played + 1,
+            wins = wins + ?,
+            losses = losses + ?,
+            current_streak = ?,
+            max_streak = ?,
+            total_guesses = total_guesses + ?,
+            hint_games = hint_games + ?,
+            hint_wins = hint_wins + ?,
+            updated_at = ?
+            {guess_sql}
+        WHERE user_id = ? AND scope = ? AND period_type = ? AND period_key = ?
+        """,
+        (
+            score_delta,
+            1 if won else 0,
+            0 if won else 1,
+            next_streak,
+            next_max,
+            guesses if won else 0,
+            1 if hints_used > 0 else 0,
+            1 if won and hints_used > 0 else 0,
+            now,
+            user_id,
+            scope,
+            period_type,
+            period_key,
+        ),
+    )
+
+
+def _unlock(conn, user_id: str, achievement_id: str, now: str, period_key: str | None = None) -> None:
+    try:
+        _execute(
+            conn,
+            "INSERT INTO player_achievements (user_id, achievement_id, period_key, unlocked_at) VALUES (?, ?, ?, ?)",
+            (user_id, achievement_id, period_key or "", now),
+        )
+    except Exception:
+        pass
+
+
+def _evaluate_achievements(conn, user_id: str, difficulty: str, won: bool, guesses: int, hints_used: int, mode: str, shared_board: bool, now: str) -> None:
+    overall = _row_to_dict(_execute(conn, "SELECT * FROM player_stats WHERE user_id = ? AND scope = 'overall'", (user_id,)).fetchone()) or {}
+    if int(overall.get("wins") or 0) >= 1:
+        _unlock(conn, user_id, "first_win", now)
+    if won and guesses <= 3:
+        _unlock(conn, user_id, "sharp_solver", now)
+    if won and hints_used == 0:
+        _unlock(conn, user_id, "no_hint_victory", now)
+    if int(overall.get("current_streak") or 0) >= 3:
+        _unlock(conn, user_id, "streak_3", now)
+    if int(overall.get("current_streak") or 0) >= 10:
+        _unlock(conn, user_id, "streak_10", now)
+    difficulty_targets = {
+        "easy": ("easy_specialist", 10),
+        "moderate": ("moderate_master", 10),
+        "difficult": ("difficult_dominator", 10),
+        "prodigy": ("prodigy_solver", 5),
+    }
+    for scope, (achievement_id, target) in difficulty_targets.items():
+        row = _row_to_dict(_execute(conn, "SELECT wins FROM player_stats WHERE user_id = ? AND scope = ?", (user_id, scope)).fetchone()) or {}
+        if int(row.get("wins") or 0) >= target:
+            _unlock(conn, user_id, achievement_id, now)
+    party_games = _execute(conn, "SELECT COUNT(DISTINCT session_id) AS count FROM game_results WHERE user_id = ? AND scope = 'overall' AND mode = 'party'", (user_id,)).fetchone()
+    if int((_row_to_dict(party_games) or {}).get("count") or 0) >= 5:
+        _unlock(conn, user_id, "party_player", now)
+    if won and mode == "party" and shared_board:
+        _unlock(conn, user_id, "team_solver", now)
+
+
+def record_result(session_id: str, user_id: str | None, token: str | None, difficulty: str, won: bool, guesses: int, hints_used: int, mode: str = "solo", shared_board: bool = False) -> bool:
     player = verify_player(user_id, token)
     if not player:
         return False
 
     now = _now_iso()
+    week_key, _, _ = _week_bounds(_parse_iso(now))
     difficulty = difficulty if difficulty in DIFFICULTY_POINTS else "easy"
     score_delta = score_for_game(difficulty, won, guesses, hints_used)
     scopes = ("overall", difficulty)
+    inserted_any = False
 
     with _conn() as conn:
         for scope in scopes:
             try:
                 _execute(
                     conn,
-                    "INSERT INTO game_results (session_id, user_id, scope, difficulty, won, score_delta, guesses, hints_used, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (session_id, user_id, scope, difficulty, bool(won), score_delta, guesses, hints_used, now),
+                    "INSERT INTO game_results (session_id, user_id, scope, difficulty, won, score_delta, guesses, hints_used, created_at, mode, shared_board) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (session_id, user_id, scope, difficulty, bool(won), score_delta, guesses, hints_used, now, mode, 1 if shared_board else 0),
                 )
             except Exception:
                 continue
 
-            current = _row_to_dict(_execute(conn, "SELECT * FROM player_stats WHERE user_id = ? AND scope = ?", (user_id, scope)).fetchone())
-            if not current:
-                _execute(conn, "INSERT INTO player_stats (user_id, scope, updated_at) VALUES (?, ?, ?)", (user_id, scope, now))
-                current = {"current_streak": 0, "max_streak": 0}
-            next_streak = int(current.get("current_streak") or 0) + 1 if won else 0
-            next_max = max(int(current.get("max_streak") or 0), next_streak)
-            _execute(
-                conn,
-                """
-                UPDATE player_stats
-                SET score = score + ?,
-                    games_played = games_played + 1,
-                    wins = wins + ?,
-                    losses = losses + ?,
-                    current_streak = ?,
-                    max_streak = ?,
-                    total_guesses = total_guesses + ?,
-                    hint_games = hint_games + ?,
-                    hint_wins = hint_wins + ?,
-                    updated_at = ?
-                WHERE user_id = ? AND scope = ?
-                """,
-                (
-                    score_delta,
-                    1 if won else 0,
-                    0 if won else 1,
-                    next_streak,
-                    next_max,
-                    guesses if won else 0,
-                    1 if hints_used > 0 else 0,
-                    1 if won and hints_used > 0 else 0,
-                    now,
-                    user_id,
-                    scope,
-                ),
-            )
-    return True
+            inserted_any = True
+            _update_player_stats(conn, user_id, scope, score_delta, won, guesses, hints_used, now)
+            _update_period_stats(conn, user_id, scope, "all_time", ALL_TIME_KEY, score_delta, won, guesses, hints_used, now)
+            _update_period_stats(conn, user_id, scope, "weekly", week_key, score_delta, won, guesses, hints_used, now)
+        if inserted_any:
+            _evaluate_achievements(conn, user_id, difficulty, won, guesses, hints_used, mode, shared_board, now)
+    return inserted_any
 
 
 def leaderboard(scope: str = "overall", limit: int = 50, user_id: str | None = None) -> dict[str, Any]:
@@ -339,3 +548,232 @@ def leaderboard(scope: str = "overall", limit: int = 50, user_id: str | None = N
                 current_user = decorate(row, index + 1)
                 break
     return {"scope": scope, "entries": decorated, "current_user": current_user}
+
+
+def _empty_stats(scope: str) -> dict[str, Any]:
+    return {
+        "scope": scope,
+        "score": 0,
+        "games_played": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "current_streak": 0,
+        "max_streak": 0,
+        "total_guesses": 0,
+        "avg_guesses": None,
+        "hint_games": 0,
+        "hint_wins": 0,
+        "guess_distribution": [0, 0, 0, 0, 0, 0],
+    }
+
+
+def _decorate_stats(row: dict[str, Any] | None, scope: str = "overall") -> dict[str, Any]:
+    if not row:
+        return _empty_stats(scope)
+    wins = int(row.get("wins") or 0)
+    games = int(row.get("games_played") or 0)
+    total_guesses = int(row.get("total_guesses") or 0)
+    return {
+        "scope": row.get("scope") or scope,
+        "score": int(row.get("score") or 0),
+        "games_played": games,
+        "wins": wins,
+        "losses": int(row.get("losses") or 0),
+        "win_rate": round((wins / games) * 100) if games else 0,
+        "current_streak": int(row.get("current_streak") or 0),
+        "max_streak": int(row.get("max_streak") or 0),
+        "total_guesses": total_guesses,
+        "avg_guesses": round(total_guesses / wins, 2) if wins else None,
+        "hint_games": int(row.get("hint_games") or 0),
+        "hint_wins": int(row.get("hint_wins") or 0),
+        "guess_distribution": [int(row.get(f"guess_{index}") or 0) for index in range(1, 7)],
+    }
+
+
+def _achievement_map(conn, user_id: str) -> dict[str, dict[str, Any]]:
+    rows = [_row_to_dict(row) for row in _execute(conn, "SELECT * FROM player_achievements WHERE user_id = ?", (user_id,)).fetchall()]
+    return {row["achievement_id"]: row for row in rows if row}
+
+
+def _achievement_progress(conn, user_id: str) -> list[dict[str, Any]]:
+    unlocked = _achievement_map(conn, user_id)
+    overall = _decorate_stats(_row_to_dict(_execute(conn, "SELECT * FROM player_stats WHERE user_id = ? AND scope = 'overall'", (user_id,)).fetchone()), "overall")
+    by_scope = {scope: _decorate_stats(_row_to_dict(_execute(conn, "SELECT * FROM player_stats WHERE user_id = ? AND scope = ?", (user_id, scope)).fetchone()), scope) for scope in SCOPES}
+    party_games = _row_to_dict(_execute(conn, "SELECT COUNT(DISTINCT session_id) AS count FROM game_results WHERE user_id = ? AND scope = 'overall' AND mode = 'party'", (user_id,)).fetchone()) or {}
+    team_wins = _row_to_dict(_execute(conn, "SELECT COUNT(DISTINCT session_id) AS count FROM game_results WHERE user_id = ? AND scope = 'overall' AND mode = 'party' AND shared_board = 1 AND won = ?", (user_id, True)).fetchone()) or {}
+    sharp = _row_to_dict(_execute(conn, "SELECT COUNT(*) AS count FROM game_results WHERE user_id = ? AND scope = 'overall' AND won = ? AND guesses <= 3", (user_id, True)).fetchone()) or {}
+    no_hint = _row_to_dict(_execute(conn, "SELECT COUNT(*) AS count FROM game_results WHERE user_id = ? AND scope = 'overall' AND won = ? AND hints_used = 0", (user_id, True)).fetchone()) or {}
+    current_values = {
+        "first_win": overall["wins"],
+        "sharp_solver": int(sharp.get("count") or 0),
+        "no_hint_victory": int(no_hint.get("count") or 0),
+        "streak_3": overall["current_streak"],
+        "streak_10": overall["current_streak"],
+        "easy_specialist": by_scope["easy"]["wins"],
+        "moderate_master": by_scope["moderate"]["wins"],
+        "difficult_dominator": by_scope["difficult"]["wins"],
+        "prodigy_solver": by_scope["prodigy"]["wins"],
+        "party_player": int(party_games.get("count") or 0),
+        "team_solver": int(team_wins.get("count") or 0),
+        "weekly_top_10": 1 if "weekly_top_10" in unlocked else 0,
+        "weekly_champion": 1 if "weekly_champion" in unlocked else 0,
+    }
+    items = []
+    for achievement in ACHIEVEMENTS:
+        current = min(int(current_values.get(achievement["id"], 0)), int(achievement["target"]))
+        unlocked_row = unlocked.get(achievement["id"])
+        items.append({
+            **achievement,
+            "current": current,
+            "unlocked": bool(unlocked_row),
+            "unlocked_at": unlocked_row.get("unlocked_at") if unlocked_row else None,
+            "period_key": unlocked_row.get("period_key") if unlocked_row else None,
+        })
+    return items
+
+
+def _top_achievements(conn, user_id: str, limit: int = 3) -> list[dict[str, Any]]:
+    return [item for item in _achievement_progress(conn, user_id) if item["unlocked"]][:limit]
+
+
+def _finalize_previous_weeks(conn) -> None:
+    current_key, _, _ = _week_bounds()
+    rows = [_row_to_dict(row) for row in _execute(conn, "SELECT DISTINCT period_key FROM player_period_stats WHERE period_type = 'weekly' AND scope = 'overall' AND period_key <> ?", (current_key,)).fetchall()]
+    for row in rows:
+        period_key = row.get("period_key") if row else None
+        if not period_key:
+            continue
+        already = _row_to_dict(_execute(conn, "SELECT 1 FROM player_achievements WHERE achievement_id IN ('weekly_top_10', 'weekly_champion') AND period_key = ? LIMIT 1", (period_key,)).fetchone())
+        if already:
+            continue
+        ranked = [_row_to_dict(r) for r in _execute(
+            conn,
+            """
+            SELECT user_id FROM player_period_stats
+            WHERE period_type = 'weekly' AND period_key = ? AND scope = 'overall' AND games_played > 0
+            ORDER BY score DESC, wins DESC, max_streak DESC, CASE WHEN wins > 0 THEN CAST(total_guesses AS REAL) / wins ELSE 999 END ASC, updated_at DESC
+            LIMIT 10
+            """,
+            (period_key,),
+        ).fetchall()]
+        stamp = _now_iso()
+        for index, ranked_row in enumerate(ranked):
+            if ranked_row:
+                _unlock(conn, ranked_row["user_id"], "weekly_top_10", stamp, period_key)
+                if index == 0:
+                    _unlock(conn, ranked_row["user_id"], "weekly_champion", stamp, period_key)
+
+
+def _rank_for(conn, user_id: str, scope: str, period: str, period_key: str) -> int | None:
+    order = "score DESC, wins DESC, max_streak DESC, CASE WHEN wins > 0 THEN CAST(total_guesses AS REAL) / wins ELSE 999 END ASC, updated_at DESC"
+    if period == "all_time":
+        rows = _execute(conn, f"SELECT user_id FROM player_stats WHERE scope = ? AND games_played > 0 ORDER BY {order}", (scope,)).fetchall()
+    else:
+        rows = _execute(conn, f"SELECT user_id FROM player_period_stats WHERE scope = ? AND period_type = 'weekly' AND period_key = ? AND games_played > 0 ORDER BY {order}", (scope, period_key)).fetchall()
+    for index, row in enumerate(rows):
+        row_user_id = row["user_id"] if isinstance(row, dict) else row[0]
+        if row_user_id == user_id:
+            return index + 1
+    return None
+
+
+def leaderboard(scope: str = "overall", limit: int = 50, user_id: str | None = None, period: str = "weekly", week: str = "current") -> dict[str, Any]:
+    scope = scope if scope in SCOPES else "overall"
+    period = period if period in PERIOD_TYPES else "weekly"
+    limit = min(max(limit, 1), 100)
+    period_key, period_start, period_end = _week_bounds_from_key(week)
+    if period == "all_time":
+        period_key = ALL_TIME_KEY
+    order = "s.score DESC, s.wins DESC, s.max_streak DESC, CASE WHEN s.wins > 0 THEN CAST(s.total_guesses AS REAL) / s.wins ELSE 999 END ASC, s.updated_at DESC"
+    source = "player_stats" if period == "all_time" else "player_period_stats"
+    where = "s.scope = ? AND s.games_played > 0" if period == "all_time" else "s.scope = ? AND s.period_type = 'weekly' AND s.period_key = ? AND s.games_played > 0"
+    params = (scope, limit) if period == "all_time" else (scope, period_key, limit)
+    all_params = (scope,) if period == "all_time" else (scope, period_key)
+    with _conn() as conn:
+        _finalize_previous_weeks(conn)
+        rows = [_row_to_dict(row) for row in _execute(
+            conn,
+            f"""
+            SELECT p.user_id, p.username, p.emoji, s.scope, s.score, s.games_played, s.wins, s.losses,
+                   s.current_streak, s.max_streak, s.total_guesses, s.hint_games, s.hint_wins,
+                   s.guess_1, s.guess_2, s.guess_3, s.guess_4, s.guess_5, s.guess_6, s.updated_at
+            FROM {source} s
+            JOIN players p ON p.user_id = s.user_id
+            WHERE {where}
+            ORDER BY {order}
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()]
+        all_rows = [_row_to_dict(row) for row in _execute(
+            conn,
+            f"""
+            SELECT p.user_id, p.username, p.emoji, s.scope, s.score, s.games_played, s.wins, s.losses,
+                   s.current_streak, s.max_streak, s.total_guesses, s.hint_games, s.hint_wins,
+                   s.guess_1, s.guess_2, s.guess_3, s.guess_4, s.guess_5, s.guess_6, s.updated_at
+            FROM {source} s
+            JOIN players p ON p.user_id = s.user_id
+            WHERE {where}
+            ORDER BY {order}
+            """,
+            all_params,
+        ).fetchall()]
+
+        def decorate(row: dict[str, Any], rank: int) -> dict[str, Any]:
+            stats = _decorate_stats(row, scope)
+            return {
+                "rank": rank,
+                "user_id": row["user_id"],
+                "username": row["username"],
+                "emoji": row.get("emoji") or "ðŸ™‚",
+                **{key: value for key, value in stats.items() if key != "scope"},
+                "badges": _top_achievements(conn, row["user_id"]),
+            }
+
+        decorated = [decorate(row, index + 1) for index, row in enumerate(rows)]
+        current_user = None
+        if user_id:
+            for index, row in enumerate(all_rows):
+                if row["user_id"] == user_id:
+                    current_user = decorate(row, index + 1)
+                    break
+    return {
+        "scope": scope,
+        "period": period,
+        "period_key": period_key,
+        "period_start": period_start.isoformat() if period == "weekly" else None,
+        "period_end": period_end.isoformat() if period == "weekly" else None,
+        "resets_at": period_end.isoformat() if period == "weekly" else None,
+        "entries": decorated,
+        "current_user": current_user,
+    }
+
+
+def public_profile(user_id: str) -> dict[str, Any] | None:
+    week_key, week_start, week_end = _week_bounds()
+    with _conn() as conn:
+        _finalize_previous_weeks(conn)
+        player = _row_to_dict(_execute(conn, "SELECT user_id, username, emoji, created_at FROM players WHERE user_id = ?", (user_id,)).fetchone())
+        if not player:
+            return None
+        all_time = {scope: _decorate_stats(_row_to_dict(_execute(conn, "SELECT * FROM player_stats WHERE user_id = ? AND scope = ?", (user_id, scope)).fetchone()), scope) for scope in SCOPES}
+        weekly = {scope: _decorate_stats(_row_to_dict(_execute(conn, "SELECT * FROM player_period_stats WHERE user_id = ? AND scope = ? AND period_type = 'weekly' AND period_key = ?", (user_id, scope, week_key)).fetchone()), scope) for scope in SCOPES}
+        achievements = _achievement_progress(conn, user_id)
+        ranks = {
+            "weekly": _rank_for(conn, user_id, "overall", "weekly", week_key),
+            "all_time": _rank_for(conn, user_id, "overall", "all_time", ALL_TIME_KEY),
+        }
+    return {
+        "player": player,
+        "period": {
+            "period_key": week_key,
+            "period_start": week_start.isoformat(),
+            "period_end": week_end.isoformat(),
+            "resets_at": week_end.isoformat(),
+        },
+        "ranks": ranks,
+        "all_time": all_time,
+        "weekly": weekly,
+        "achievements": achievements,
+    }

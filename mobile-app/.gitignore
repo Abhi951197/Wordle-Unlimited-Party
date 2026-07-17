@@ -56,3 +56,5 @@ mobile-app/dist/
 *.log
 evaluator.md
 agent.md
+
+.vercel
