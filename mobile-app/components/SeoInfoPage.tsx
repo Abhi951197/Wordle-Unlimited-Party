@@ -23,6 +23,7 @@ const navItems = [
   { href: '/', label: 'Play' },
   { href: '/how-to-play', label: 'How to Play' },
   { href: '/features', label: 'Features' },
+  { href: '/leaderboard', label: 'Leaderboard' },
   { href: '/contact', label: 'Contact' },
   { href: '/terms', label: 'Terms' },
   { href: '/privacy', label: 'Privacy' },
@@ -31,6 +32,7 @@ const navItems = [
 const pageArt: Record<string, { icon: string; accent: string; image?: string; note: string }> = {
   '/how-to-play': { icon: '💡', accent: '#FACC15', note: 'Master the rules in minutes.' },
   '/features': { icon: '👑', accent: '#22C55E', image: '/party-illustration.png', note: 'Built for solo focus and friend sessions.' },
+  '/leaderboard': { icon: '🏆', accent: '#FACC15', note: 'Climb the rankings without creating an account.' },
   '/privacy': { icon: '🔒', accent: '#22C55E', note: 'Clear, minimal, and respectful.' },
   '/terms': { icon: '🛡️', accent: '#8B5CF6', note: 'Simple rules for fair play.' },
   '/contact': { icon: '✉️', accent: '#A855F7', note: 'Feedback, bugs, ideas, and SEO questions.' },

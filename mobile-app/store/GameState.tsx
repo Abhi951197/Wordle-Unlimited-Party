@@ -98,6 +98,37 @@ export interface ChatMessage {
 
 export type ActiveBoard = 'shared' | 'individual';
 
+export interface LeaderboardProfile {
+  user_id: string;
+  username: string;
+  emoji: string;
+  leaderboard_token: string;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  user_id: string;
+  username: string;
+  emoji: string;
+  score: number;
+  games_played: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  current_streak: number;
+  max_streak: number;
+  avg_guesses?: number | null;
+  hint_games: number;
+  hint_wins: number;
+}
+
+export interface LeaderboardResponse {
+  scope: string;
+  entries: LeaderboardEntry[];
+  current_user?: LeaderboardEntry | null;
+  scoring: Record<string, unknown>;
+}
+
 interface GameStateContextType {
   difficulty: string;
   wordLength: number;
@@ -106,6 +137,7 @@ interface GameStateContextType {
   playerId: string | null;
   playerName: string;
   playerEmoji: string;
+  leaderboardProfile: LeaderboardProfile | null;
   roomPlayers: RoomPlayer[];
   maxRoomPlayers: number;
   typingPlayerName: string | null;
@@ -125,6 +157,9 @@ interface GameStateContextType {
   startGame: (difficulty: string) => Promise<void>;
   createRoom: (difficulty: string, playerName: string, playerEmoji?: string) => Promise<boolean>;
   joinRoom: (roomId: string, playerName: string, playerEmoji?: string) => Promise<boolean>;
+  registerLeaderboardProfile: (username: string, emoji?: string) => Promise<boolean>;
+  checkUsername: (username: string) => Promise<{ available: boolean; valid: boolean; message?: string | null }>;
+  fetchLeaderboard: (scope?: string) => Promise<LeaderboardResponse | null>;
   leaveRoom: (options?: { forgetIdentity?: boolean }) => void;
   createSharedGame: () => Promise<void>;
   createIndividualGame: () => Promise<void>;
@@ -160,6 +195,7 @@ const defaultStats: Stats = {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 const ROOM_STORAGE_KEY = 'word_party_room';
+const LEADERBOARD_PROFILE_KEY = 'word_leaderboard_profile';
 
 const GameStateContext = createContext<GameStateContextType | undefined>(undefined);
 
@@ -170,6 +206,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [roomId, setRoomId] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState('Player');
+  const [leaderboardProfile, setLeaderboardProfile] = useState<LeaderboardProfile | null>(null);
   const [playerEmoji, setPlayerEmoji] = useState('🙂');
   const [roomPlayers, setRoomPlayers] = useState<RoomPlayer[]>([]);
   const [maxRoomPlayers, setMaxRoomPlayers] = useState(8);
@@ -225,6 +262,19 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   useEffect(() => {
     AsyncStorage.getItem('word_unlimited_stats').then(val => {
       if (val) setStats(normalizeStats(JSON.parse(val)));
+    });
+    AsyncStorage.getItem(LEADERBOARD_PROFILE_KEY).then(val => {
+      if (!val) return;
+      try {
+        const saved = JSON.parse(val);
+        if (saved?.user_id && saved?.username && saved?.leaderboard_token) {
+          setLeaderboardProfile(saved);
+          setPlayerName(saved.username);
+          setPlayerEmoji(saved.emoji || '🙂');
+        }
+      } catch {
+        AsyncStorage.removeItem(LEADERBOARD_PROFILE_KEY);
+      }
     });
   }, []);
 
@@ -330,6 +380,64 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToastState({ message, type });
     toastTimer.current = setTimeout(() => setToastState(null), 2400);
+  };
+
+  const registerLeaderboardProfile = async (username: string, emoji = '🙂') => {
+    try {
+      const res = await fetch(`${API_URL}/players/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          emoji,
+          user_id: leaderboardProfile?.user_id,
+          leaderboard_token: leaderboardProfile?.leaderboard_token,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data?.detail || 'Could not save username', res.status === 409 ? 'warning' : 'error');
+        return false;
+      }
+      const profile: LeaderboardProfile = {
+        user_id: data.user_id,
+        username: data.username,
+        emoji: data.emoji || emoji,
+        leaderboard_token: data.leaderboard_token,
+      };
+      setLeaderboardProfile(profile);
+      setPlayerName(profile.username);
+      setPlayerEmoji(profile.emoji);
+      await AsyncStorage.setItem(LEADERBOARD_PROFILE_KEY, JSON.stringify(profile));
+      showToast('Leaderboard profile ready', 'info');
+      return true;
+    } catch {
+      showToast('Could not reach leaderboard service', 'error');
+      return false;
+    }
+  };
+
+  const checkUsername = async (username: string) => {
+    try {
+      const res = await fetch(`${API_URL}/players/check-username?username=${encodeURIComponent(username)}`);
+      if (!res.ok) throw new Error('check username');
+      const data = await res.json();
+      return { available: !!data.available, valid: !!data.valid, message: data.message ?? null };
+    } catch {
+      return { available: false, valid: false, message: 'Could not check username' };
+    }
+  };
+
+  const fetchLeaderboard = async (scope = 'overall') => {
+    try {
+      const current = leaderboardProfile?.user_id ? `&player_id=${encodeURIComponent(leaderboardProfile.user_id)}` : '';
+      const res = await fetch(`${API_URL}/leaderboard?scope=${encodeURIComponent(scope)}&limit=50${current}`);
+      if (!res.ok) throw new Error('leaderboard');
+      return await res.json();
+    } catch {
+      showToast('Could not load leaderboard', 'warning');
+      return null;
+    }
   };
 
   const triggerShake = () => setInvalidShake(v => v + 1);
@@ -477,7 +585,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const startGame = async (diff: string) => {
     try {
-      const res = await fetch(`${API_URL}/word?difficulty=${diff}`);
+      const leaderboardQuery = leaderboardProfile
+        ? `&leaderboard_user_id=${encodeURIComponent(leaderboardProfile.user_id)}&leaderboard_token=${encodeURIComponent(leaderboardProfile.leaderboard_token)}`
+        : '';
+      const res = await fetch(`${API_URL}/word?difficulty=${diff}${leaderboardQuery}`);
       const data = await res.json();
       setSessionId(data.session_id);
       setRoomId(null);
@@ -508,16 +619,22 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const res = await fetch(`${API_URL}/rooms`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty: diff, player_name: name, player_emoji: emoji }),
+        body: JSON.stringify({
+          difficulty: diff,
+          player_name: leaderboardProfile?.username || name,
+          player_emoji: leaderboardProfile?.emoji || emoji,
+          leaderboard_user_id: leaderboardProfile?.user_id,
+          leaderboard_token: leaderboardProfile?.leaderboard_token,
+        }),
       });
       if (!res.ok) throw new Error('Could not create room');
 
       const data = await res.json();
-      const cleanName = name.trim() || 'Player';
+      const cleanName = leaderboardProfile?.username || name.trim() || 'Player';
       setPlayerId(data.player_id);
       setPlayerName(cleanName);
-      setPlayerEmoji(emoji);
-      await persistRoom(data, cleanName, emoji);
+      setPlayerEmoji(leaderboardProfile?.emoji || emoji);
+      await persistRoom(data, cleanName, leaderboardProfile?.emoji || emoji);
       resetBoardState();
       applyRoomState(data, data.player_id);
       showToast(`Room ${data.room_id} is ready`, 'info');
@@ -553,7 +670,13 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const res = await fetch(`${API_URL}/rooms/${normalizedCode}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ player_id: reusePlayerId, player_name: name, player_emoji: emoji }),
+        body: JSON.stringify({
+          player_id: reusePlayerId,
+          player_name: leaderboardProfile?.username || name,
+          player_emoji: leaderboardProfile?.emoji || emoji,
+          leaderboard_user_id: leaderboardProfile?.user_id,
+          leaderboard_token: leaderboardProfile?.leaderboard_token,
+        }),
       });
       if (res.status === 404) {
         showToast('Room not found', 'error');
@@ -566,11 +689,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (!res.ok) throw new Error('Could not join room');
 
       const data = await res.json();
-      const cleanName = name.trim() || 'Player';
+      const cleanName = leaderboardProfile?.username || name.trim() || 'Player';
       setPlayerId(data.player_id);
       setPlayerName(cleanName);
-      setPlayerEmoji(emoji);
-      await persistRoom(data, cleanName, emoji);
+      setPlayerEmoji(leaderboardProfile?.emoji || emoji);
+      await persistRoom(data, cleanName, leaderboardProfile?.emoji || emoji);
       resetBoardState();
       applyRoomState(data, data.player_id);
       showToast(`Joined room ${data.room_id}`, 'info');
@@ -810,8 +933,18 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       inputSyncSeq.current += 1;
       const endpoint = roomId && playerId ? `${API_URL}/rooms/${roomId}/guess` : `${API_URL}/guess`;
       const body = roomId && playerId
-        ? { player_id: playerId, guess }
-        : { session_id: sessionId, guess };
+        ? {
+          player_id: playerId,
+          guess,
+          leaderboard_user_id: leaderboardProfile?.user_id,
+          leaderboard_token: leaderboardProfile?.leaderboard_token,
+        }
+        : {
+          session_id: sessionId,
+          guess,
+          leaderboard_user_id: leaderboardProfile?.user_id,
+          leaderboard_token: leaderboardProfile?.leaderboard_token,
+        };
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -899,10 +1032,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   return (
     <GameStateContext.Provider value={{
-      difficulty, wordLength, sessionId, roomId, playerId, playerName, playerEmoji,
+      difficulty, wordLength, sessionId, roomId, playerId, playerName, playerEmoji, leaderboardProfile,
       roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard, sharedBoard, individualBoard, shareRequest, chatMessages,
       guesses, results, currentGuess, gameStatus, letterStates, stats,
       startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
+      registerLeaderboardProfile, checkUsername, fetchLeaderboard,
       changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, sendChatMessage, addLetter, removeLetter,
       submitGuess, getHint, hints, hintsUsed, invalidShake, lastSubmittedRow,
       answer, answerInfo, maxGuesses, toast,

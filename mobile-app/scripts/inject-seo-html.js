@@ -36,6 +36,7 @@ const pages = [
     <ul>
       <li><a href="/how-to-play">How to Play</a></li>
       <li><a href="/features">Features</a></li>
+      <li><a href="/leaderboard">Leaderboard</a></li>
       <li><a href="/privacy">Privacy Policy</a></li>
       <li><a href="/terms">Terms of Use</a></li>
       <li><a href="/contact">Contact</a></li>
@@ -66,6 +67,17 @@ const pages = [
   <section><h2>Multiplayer Rooms</h2><p>Create a room, share a code or invite link, and play Wordle online with friends from different devices.</p></section>
   <section><h2>Shared and Individual Boards</h2><p>Use shared boards to solve together or individual boards while staying in the same party room.</p></section>
   <section><h2>Learning Tools</h2><p>Hints, answer meanings, statistics, and difficulty levels help casual and serious word game players.</p></section>
+</main>`,
+  },
+  {
+    files: ['leaderboard.html'],
+    label: 'Wordle Unlimited Party leaderboard',
+    html: String.raw`
+<main id="seo-content" class="seo-content" aria-label="Wordle Unlimited Party leaderboard">
+  <header class="seo-hero"><h1>Wordle Unlimited Party Leaderboard</h1><p>Compete on a no-login Wordle leaderboard with unique usernames, difficulty rankings, streaks, win rates, and transparent scoring rules.</p></header>
+  <section><h2>No-Login Rankings</h2><p>Players choose a unique public username once and can appear on global rankings without creating an account.</p></section>
+  <section><h2>Scoring Rules</h2><p>Wins earn base points by difficulty, plus efficiency and no-hint bonuses. Hint-assisted games still count but receive a smaller score.</p></section>
+  <section><h2>Difficulty Tabs</h2><p>Overall, Easy, Moderate, Difficult, and Prodigy leaderboards help players compare fairly.</p></section>
 </main>`,
   },
   {

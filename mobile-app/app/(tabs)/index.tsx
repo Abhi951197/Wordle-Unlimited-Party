@@ -22,7 +22,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
 import { WordGrid } from '@/components/WordGrid';
-import { ActiveBoard, AnswerInfo, ChatMessage, HintState, useGameState } from '@/store/GameState';
+import { ActiveBoard, AnswerInfo, ChatMessage, HintState, LeaderboardEntry, LeaderboardResponse, useGameState } from '@/store/GameState';
 import { trackEvent } from '@/utils/analytics';
 
 const DIFF_META: Record<string, { color: string; label: string; desc: string; guesses: string; mark: string }> = {
@@ -35,6 +35,7 @@ const DIFF_META: Record<string, { color: string; label: string; desc: string; gu
 type AppView = 'splash' | 'mode' | 'difficulty' | 'party' | 'roomCreated' | 'solo';
 type PlayMode = 'solo' | 'party';
 type StatsTab = 'overall' | 'easy' | 'moderate' | 'difficult' | 'prodigy';
+type LeaderboardTab = StatsTab | 'rules';
 
 interface RecentRoom {
   roomId: string;
@@ -87,6 +88,7 @@ const ToastBanner: React.FC<{ message: string; type: 'error' | 'warning' | 'info
 export default function GameScreen() {
   const {
     startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, changeRoomDifficulty,
+    registerLeaderboardProfile, checkUsername, fetchLeaderboard, leaderboardProfile,
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
     sessionId, difficulty, roomId, playerId, playerEmoji, roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard,
@@ -109,6 +111,13 @@ export default function GameScreen() {
   const [emojiModal, setEmojiModal] = useState(false);
   const [chatModal, setChatModal] = useState(false);
   const [hintModal, setHintModal] = useState(false);
+  const [leaderboardModal, setLeaderboardModal] = useState(false);
+  const [profileModal, setProfileModal] = useState(false);
+  const [leaderboardTab, setLeaderboardTab] = useState<LeaderboardTab>('overall');
+  const [leaderboardData, setLeaderboardData] = useState<LeaderboardResponse | null>(null);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
+  const [usernameStatus, setUsernameStatus] = useState('');
   const [seenChatId, setSeenChatId] = useState<string | null>(null);
   const [chatPopupVisible, setChatPopupVisible] = useState(false);
   const [roomName, setRoomName] = useState('');
@@ -179,6 +188,12 @@ export default function GameScreen() {
     const timer = setTimeout(() => setShowResultOverlay(true), 1000);
     return () => clearTimeout(timer);
   }, [gameStatus, sessionId]);
+
+  useEffect(() => {
+    if (!leaderboardProfile) return;
+    setRoomName(leaderboardProfile.username);
+    setSelectedEmoji(leaderboardProfile.emoji || selectedEmoji);
+  }, [leaderboardProfile?.user_id]);
 
   useEffect(() => {
     if (roomId) void saveRecentRoom(roomId, roomName);
@@ -268,6 +283,46 @@ export default function GameScreen() {
     }
   };
 
+  const refreshLeaderboard = async (scope: LeaderboardTab = leaderboardTab) => {
+    if (scope === 'rules') return;
+    setLeaderboardLoading(true);
+    const data = await fetchLeaderboard(scope);
+    setLeaderboardData(data);
+    setLeaderboardLoading(false);
+  };
+
+  const openLeaderboard = async (scope: LeaderboardTab = 'overall') => {
+    setLeaderboardTab(scope);
+    setLeaderboardModal(true);
+    if (scope !== 'rules') await refreshLeaderboard(scope);
+  };
+
+  const saveLeaderboardProfile = async () => {
+    const username = usernameInput.trim();
+    if (!username) {
+      setUsernameStatus('Choose a username first.');
+      return;
+    }
+    const check = await checkUsername(username);
+    if (!check.valid || !check.available) {
+      setUsernameStatus(check.message || 'That username is not available.');
+      return;
+    }
+    const saved = await registerLeaderboardProfile(username, selectedEmoji);
+    if (saved) {
+      setRoomName(username.toLowerCase());
+      setProfileModal(false);
+      setUsernameStatus('');
+    }
+  };
+
+  const ensureLeaderboardProfile = () => {
+    if (leaderboardProfile) return true;
+    setUsernameInput(roomName.trim().replace(/\s+/g, '_').toLowerCase());
+    setProfileModal(true);
+    return false;
+  };
+
   function playFeedback(kind: 'key' | 'delete' | 'submit' | 'win', vibrate = true) {
     if (settings.sound && Platform.OS === 'web' && typeof window !== 'undefined') {
       try {
@@ -354,6 +409,10 @@ export default function GameScreen() {
   };
 
   const startSelectedDifficulty = async (nextDifficulty = difficulty) => {
+    if (!leaderboardProfile) {
+      setUsernameInput(roomName.trim().replace(/\s+/g, '_').toLowerCase());
+      setProfileModal(true);
+    }
     if (selectedMode === 'solo') {
       if (roomId) leaveRoom();
       await startGame(nextDifficulty);
@@ -365,17 +424,21 @@ export default function GameScreen() {
   };
 
   const createParty = async () => {
-    if (!roomName.trim()) {
+    if (!leaderboardProfile && !ensureLeaderboardProfile()) return;
+    const displayName = leaderboardProfile?.username || roomName;
+    if (!displayName.trim()) {
       setNameError('Enter your name to continue');
       return;
     }
     setNameError('');
-    const created = await createRoom(difficulty, roomName, selectedEmoji);
+    const created = await createRoom(difficulty, displayName, leaderboardProfile?.emoji || selectedEmoji);
     if (created) setView('roomCreated');
   };
 
   const joinParty = async () => {
-    if (!roomName.trim()) {
+    if (!leaderboardProfile && !ensureLeaderboardProfile()) return;
+    const displayName = leaderboardProfile?.username || roomName;
+    if (!displayName.trim()) {
       setNameError('Enter your name to continue');
       return;
     }
@@ -388,7 +451,7 @@ export default function GameScreen() {
       setRecentWarning('This room is not live right now. Join another room.');
       return;
     }
-    const joined = await joinRoom(joinCode, roomName, selectedEmoji);
+    const joined = await joinRoom(joinCode, displayName, leaderboardProfile?.emoji || selectedEmoji);
     if (joined) {
       if (joinCode.trim()) void saveRecentRoom(joinCode.trim().toUpperCase(), roomName);
       setView('party');
@@ -445,6 +508,7 @@ export default function GameScreen() {
       </View>
       <View style={styles.topActions}>
         {roomId && roomActions && <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => setRoomModal(true)}><IconMark name="info" color={palette.text} /></TouchableOpacity>}
+        <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => openLeaderboard('overall')}><Text style={[styles.smallIconText, { color: '#FACC15' }]}>🏆</Text></TouchableOpacity>
         <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => setDiffModal(true)}><Text style={[styles.smallIconText, { color: activeMeta.color }]}>{activeMeta.mark}</Text></TouchableOpacity>
         <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => { trackEvent('Settings Opened'); setSettingsModal(true); }}><IconMark name="dots" color={palette.text} /></TouchableOpacity>
       </View>
@@ -594,6 +658,7 @@ export default function GameScreen() {
                   </View>
                 </View>
                 <View style={styles.homeNav}>
+                  <TouchableOpacity style={styles.homeNavButton} onPress={() => openLeaderboard('overall')}><Text style={styles.homeNavButtonText}>Leaderboard</Text></TouchableOpacity>
                   <Link href={'/how-to-play' as never} style={styles.homeNavLink}>How to Play</Link>
                   <Link href={'/features' as never} style={styles.homeNavLink}>Features</Link>
                   <Link href={'/contact' as never} style={styles.homeNavLink}>Contact</Link>
@@ -637,6 +702,7 @@ export default function GameScreen() {
               </View>
 
               <View style={styles.homeFeatureStrip}>
+                <TouchableOpacity style={styles.homeFeature} onPress={() => openLeaderboard('overall')} activeOpacity={0.86}><Text style={styles.homeFeatureIcon}>🏆</Text><Text style={styles.homeFeatureTitle}>Leaderboard</Text><Text style={styles.homeFeatureText}>Top players</Text></TouchableOpacity>
                 <View style={styles.homeFeature}><Text style={styles.homeFeatureIcon}>∞</Text><Text style={styles.homeFeatureTitle}>Unlimited Puzzles</Text><Text style={styles.homeFeatureText}>Endless fun</Text></View>
                 <View style={styles.homeFeature}><Text style={styles.homeFeatureIcon}>🎙️</Text><Text style={styles.homeFeatureTitle}>Live Voice Chat</Text><Text style={styles.homeFeatureText}>Optional</Text></View>
                 <View style={styles.homeFeature}><Text style={styles.homeFeatureIcon}>👥</Text><Text style={styles.homeFeatureTitle}>Multiple Rooms</Text><Text style={styles.homeFeatureText}>Invite friends</Text></View>
@@ -848,7 +914,85 @@ export default function GameScreen() {
           <View style={styles.helpCard}>
             <Text style={styles.sheetTitle}>Statistics</Text>
             <StatsSummary stats={stats} activeTab={statsTab} onTabChange={setStatsTab} gameStatus={gameStatus} guesses={guesses} />
+            <TouchableOpacity style={styles.inlineAction} onPress={() => { setStatsModal(false); openLeaderboard('overall'); }}><Text style={styles.inlineActionText}>Open Leaderboard</Text></TouchableOpacity>
             <TouchableOpacity style={styles.primaryBtn} onPress={() => setStatsModal(false)}><Text style={styles.primaryText}>Close</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={profileModal} transparent animationType="fade" onRequestClose={() => setProfileModal(false)}>
+        <View style={styles.centerModal}>
+          <View style={[styles.menuCard, themed.card]}>
+            <View style={styles.sheetHeader}>
+              <Text style={[styles.sheetTitle, themed.titleText]}>Choose Username</Text>
+              <TouchableOpacity style={[styles.closeIconBtn, themed.iconBtn]} onPress={() => setProfileModal(false)}>
+                <IconMark name="x" color={palette.text} />
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.helpText, themed.subtleText]}>Pick one public username for leaderboard rankings. It is saved on this device.</Text>
+            <TouchableOpacity style={styles.emojiPickerButton} onPress={() => setEmojiModal(true)}>
+              <Text style={styles.emojiPickerButtonText}>{selectedEmoji}</Text>
+              <Text style={styles.emojiPickerLabel}>Change emoji</Text>
+            </TouchableOpacity>
+            <TextInput
+              value={usernameInput}
+              onChangeText={(value) => { setUsernameInput(value.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 16)); setUsernameStatus(''); }}
+              placeholder="unique_username"
+              placeholderTextColor="#64748B"
+              autoCapitalize="none"
+              style={[styles.input, themed.input]}
+            />
+            {!!usernameStatus && <Text style={styles.fieldError}>{usernameStatus}</Text>}
+            <TouchableOpacity style={styles.primaryBtn} onPress={saveLeaderboardProfile}><Text style={styles.primaryText}>Save Username</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.ghostBtn} onPress={() => setProfileModal(false)}><Text style={styles.ghostText}>Continue as Guest</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={leaderboardModal} transparent animationType="slide" onRequestClose={() => setLeaderboardModal(false)}>
+        <View style={styles.centerModal}>
+          <View style={[styles.leaderboardCard, themed.card]}>
+            <View style={styles.sheetHeader}>
+              <View>
+                <Text style={[styles.sheetTitle, themed.titleText]}>Leaderboard</Text>
+                <Text style={[styles.topSubtitle, themed.mutedText]}>{leaderboardProfile ? `${leaderboardProfile.emoji} ${leaderboardProfile.username}` : 'Guest games are not ranked'}</Text>
+              </View>
+              <TouchableOpacity style={[styles.closeIconBtn, themed.iconBtn]} onPress={() => setLeaderboardModal(false)}>
+                <IconMark name="x" color={palette.text} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.leaderboardTabs}>
+              {(['overall', 'easy', 'moderate', 'difficult', 'prodigy', 'rules'] as LeaderboardTab[]).map(tab => (
+                <TouchableOpacity key={tab} style={[styles.leaderboardTab, leaderboardTab === tab && styles.leaderboardTabActive]} onPress={() => { setLeaderboardTab(tab); if (tab !== 'rules') refreshLeaderboard(tab); }}>
+                  <Text style={[styles.leaderboardTabText, leaderboardTab === tab && styles.leaderboardTabTextActive]}>{tab}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {leaderboardTab === 'rules' ? (
+              <View style={styles.rulesBox}>
+                <Text style={styles.ruleTitle}>Scoring Rules</Text>
+                <Text style={styles.ruleText}>Easy win: 100 points</Text>
+                <Text style={styles.ruleText}>Moderate win: 140 points</Text>
+                <Text style={styles.ruleText}>Difficult win: 180 points</Text>
+                <Text style={styles.ruleText}>Prodigy win: 250 points</Text>
+                <Text style={styles.ruleText}>Efficiency bonus: 10 × remaining guesses</Text>
+                <Text style={styles.ruleText}>No-hint bonus: +15</Text>
+                <Text style={styles.ruleText}>Hint penalty: -10 × hints used</Text>
+                <Text style={styles.ruleExample}>Example: Easy win in 4 guesses with no hints = 100 + 20 + 15 = 135.</Text>
+              </View>
+            ) : leaderboardLoading ? (
+              <View style={styles.boardLoading}><ActivityIndicator color="#16C75A" /><Text style={styles.boardLoadingText}>Loading rankings...</Text></View>
+            ) : (
+              <ScrollView style={styles.leaderboardList} contentContainerStyle={styles.leaderboardListContent}>
+                {leaderboardData?.current_user && !leaderboardData.entries.some(entry => entry.user_id === leaderboardData.current_user?.user_id) && (
+                  <LeaderboardRow entry={leaderboardData.current_user} current />
+                )}
+                {(leaderboardData?.entries ?? []).map(entry => (
+                  <LeaderboardRow key={entry.user_id} entry={entry} current={entry.user_id === leaderboardProfile?.user_id} />
+                ))}
+                {!leaderboardData?.entries?.length && <Text style={styles.hintEmptyText}>No ranked games yet. Finish a puzzle to appear here.</Text>}
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>
@@ -893,6 +1037,7 @@ export default function GameScreen() {
             </View>
             <TouchableOpacity style={styles.menuRow} onPress={() => { setHelpModal(true); setSettingsModal(false); }}><Text style={styles.menuText}>How to Play</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
             <TouchableOpacity style={styles.menuRow} onPress={() => { setStatsModal(true); setSettingsModal(false); }}><Text style={styles.menuText}>Statistics</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.menuRow} onPress={() => { setSettingsModal(false); openLeaderboard('overall'); }}><Text style={styles.menuText}>Leaderboard</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
             <TouchableOpacity style={styles.menuRow}><Text style={styles.menuText}>Achievements</Text><Text style={styles.menuMuted}>Soon</Text></TouchableOpacity>
           </View>
         </View>
@@ -982,6 +1127,7 @@ export default function GameScreen() {
             {hintsUsed > 0 && <Text style={styles.hintAssistedText}>Hint-assisted</Text>}
             {answerInfo && <AnswerMeaningCard info={answerInfo} />}
             <StatsSummary stats={stats} activeTab="overall" gameStatus={gameStatus} guesses={guesses} compact />
+            <TouchableOpacity style={styles.inlineAction} onPress={() => openLeaderboard('overall')}><Text style={styles.inlineActionText}>View Leaderboard</Text></TouchableOpacity>
             {roomId ? (
               <>
                 <TouchableOpacity style={styles.primaryBtn} onPress={createSharedGame}><Text style={styles.primaryText}>Continue Together</Text></TouchableOpacity>
@@ -1057,6 +1203,21 @@ const ChatBubble: React.FC<{ message: ChatMessage; mine: boolean }> = ({ message
   <View style={[styles.chatBubble, mine && styles.chatBubbleMine]}>
     <Text style={styles.chatAuthor}>{message.player_emoji || '🙂'} {message.player_name}</Text>
     <Text style={styles.chatText}>{message.text}</Text>
+  </View>
+);
+
+const LeaderboardRow: React.FC<{ entry: LeaderboardEntry; current?: boolean }> = ({ entry, current }) => (
+  <View style={[styles.leaderboardRow, current && styles.leaderboardRowCurrent]}>
+    <Text style={styles.leaderRank}>#{entry.rank}</Text>
+    <Text style={styles.leaderEmoji}>{entry.emoji || '🙂'}</Text>
+    <View style={styles.leaderNameWrap}>
+      <Text style={styles.leaderName} numberOfLines={1}>{entry.username}{current ? ' (You)' : ''}</Text>
+      <Text style={styles.leaderMeta}>{entry.wins} wins · {entry.win_rate}% · streak {entry.current_streak}/{entry.max_streak}</Text>
+    </View>
+    <View style={styles.leaderScoreWrap}>
+      <Text style={styles.leaderScore}>{entry.score}</Text>
+      <Text style={styles.leaderAvg}>{entry.avg_guesses ? `${entry.avg_guesses} avg` : 'no avg'}</Text>
+    </View>
   </View>
 );
 
@@ -1219,6 +1380,8 @@ const styles = StyleSheet.create({
   homeLogoSub: { color: '#AEB8CF', fontSize: 11, fontWeight: '800' },
   homeNav: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' },
   homeNavLink: { color: '#B8C2D8', fontSize: 12, fontWeight: '900', textDecorationLine: 'none', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: '#10182A' },
+  homeNavButton: { borderRadius: 12, backgroundColor: '#2A2108', borderWidth: 1, borderColor: '#FACC15', paddingHorizontal: 10, paddingVertical: 8 },
+  homeNavButtonText: { color: '#FDE68A', fontSize: 12, fontWeight: '900' },
   homePanel: { borderRadius: 28, borderWidth: 1, borderColor: '#6D28D9', backgroundColor: '#07101F', padding: 20, flexDirection: 'row', gap: 20, overflow: 'hidden' },
   homePanelMobile: { padding: 14, borderRadius: 22, flexDirection: 'column' },
   homeHeroCopy: { flex: 1.05, justifyContent: 'center', gap: 10, minWidth: 0 },
@@ -1399,6 +1562,28 @@ const styles = StyleSheet.create({
   exampleGray: { backgroundColor: '#64748B' },
   exampleLetter: { color: '#fff', fontWeight: '900', fontSize: 18 },
   menuCard: { width: '100%', maxWidth: 390, borderRadius: 24, backgroundColor: '#151C27', borderWidth: 1, borderColor: '#283447', padding: 14, gap: 8 },
+  leaderboardCard: { width: '100%', maxWidth: 720, maxHeight: '88%', borderRadius: 24, backgroundColor: '#151C27', borderWidth: 1, borderColor: '#283447', padding: 14, gap: 10 },
+  leaderboardTabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  leaderboardTab: { minHeight: 32, borderRadius: 10, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  leaderboardTabActive: { borderColor: '#FACC15', backgroundColor: '#2A2108' },
+  leaderboardTabText: { color: '#9CA3AF', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+  leaderboardTabTextActive: { color: '#FDE68A' },
+  leaderboardList: { maxHeight: 440 },
+  leaderboardListContent: { gap: 8, paddingVertical: 4 },
+  leaderboardRow: { minHeight: 64, borderRadius: 16, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', paddingHorizontal: 10, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  leaderboardRowCurrent: { borderColor: '#16C75A', backgroundColor: '#10251A' },
+  leaderRank: { width: 42, color: '#FDE68A', fontSize: 13, fontWeight: '900' },
+  leaderEmoji: { fontSize: 24, width: 30, textAlign: 'center' },
+  leaderNameWrap: { flex: 1, minWidth: 0 },
+  leaderName: { color: '#F8FAFC', fontSize: 14, fontWeight: '900' },
+  leaderMeta: { color: '#9CA3AF', fontSize: 11, fontWeight: '800', marginTop: 3 },
+  leaderScoreWrap: { alignItems: 'flex-end', minWidth: 58 },
+  leaderScore: { color: '#16C75A', fontSize: 18, fontWeight: '900' },
+  leaderAvg: { color: '#9CA3AF', fontSize: 10, fontWeight: '800' },
+  rulesBox: { borderRadius: 18, borderWidth: 1, borderColor: '#FACC15', backgroundColor: '#2A2108', padding: 14, gap: 8 },
+  ruleTitle: { color: '#FDE68A', fontSize: 18, fontWeight: '900' },
+  ruleText: { color: '#FFF7C2', fontSize: 13, fontWeight: '800', lineHeight: 19 },
+  ruleExample: { color: '#F8FAFC', fontSize: 13, fontWeight: '900', lineHeight: 19, marginTop: 5 },
   menuRow: { minHeight: 52, borderRadius: 14, backgroundColor: '#111827', borderWidth: 1, borderColor: '#283447', paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   menuText: { color: '#F8FAFC', fontSize: 14, fontWeight: '900' },
   menuMuted: { color: '#9CA3AF', fontSize: 12, fontWeight: '900' },

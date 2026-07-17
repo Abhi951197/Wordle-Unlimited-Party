@@ -2,6 +2,7 @@
 backend/__pycache__/
 backend/*.pyc
 backend/.env
+backend/leaderboard.db
 
 # Node / Expo
 mobile-app/node_modules/

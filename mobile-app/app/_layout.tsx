@@ -71,6 +71,7 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="how-to-play" options={{ headerShown: false }} />
           <Stack.Screen name="features" options={{ headerShown: false }} />
+          <Stack.Screen name="leaderboard" options={{ headerShown: false }} />
           <Stack.Screen name="privacy" options={{ headerShown: false }} />
           <Stack.Screen name="terms" options={{ headerShown: false }} />
           <Stack.Screen name="contact" options={{ headerShown: false }} />

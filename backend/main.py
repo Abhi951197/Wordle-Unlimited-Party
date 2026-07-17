@@ -11,6 +11,14 @@ import random
 
 from words import get_word, VALID_GUESSES
 from word_metadata import get_word_metadata, validate_metadata_coverage
+from leaderboard import (
+    init_db,
+    leaderboard as get_leaderboard,
+    record_result,
+    register_player,
+    username_available,
+    validate_username,
+)
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -45,6 +53,8 @@ missing_metadata = validate_metadata_coverage()
 if missing_metadata and os.getenv("RENDER") != "true":
     raise RuntimeError(f"Missing word metadata for {len(missing_metadata)} answers")
 
+init_db()
+
 class GameCreateResponse(BaseModel):
     session_id: str
     length: int
@@ -52,6 +62,8 @@ class GameCreateResponse(BaseModel):
 class GuessRequest(BaseModel):
     session_id: str
     guess: str
+    leaderboard_user_id: str | None = None
+    leaderboard_token: str | None = None
 
 class GuessResponse(BaseModel):
     states: list[str]  # e.g. ["correct", "present", "absent", ...]
@@ -63,6 +75,8 @@ class GuessResponse(BaseModel):
 
 class PlayerRequest(BaseModel):
     player_name: str = "Player"
+    leaderboard_user_id: str | None = None
+    leaderboard_token: str | None = None
     player_id: str | None = None
     player_emoji: str = "🙂"
 
@@ -75,6 +89,8 @@ class RoomJoinRequest(PlayerRequest):
 class RoomGuessRequest(BaseModel):
     player_id: str
     guess: str
+    leaderboard_user_id: str | None = None
+    leaderboard_token: str | None = None
 
 class RoomInputRequest(BaseModel):
     player_id: str
@@ -184,6 +200,46 @@ class HintResponse(BaseModel):
     revealed_position: int | None = None
     revealed_letter: str | None = None
 
+class PlayerRegisterRequest(BaseModel):
+    username: str
+    emoji: str = "🙂"
+    user_id: str | None = None
+    leaderboard_token: str | None = None
+
+class PlayerRegisterResponse(BaseModel):
+    user_id: str
+    username: str
+    emoji: str
+    leaderboard_token: str
+
+class UsernameAvailabilityResponse(BaseModel):
+    username: str
+    available: bool
+    valid: bool
+    message: str | None = None
+
+class LeaderboardEntry(BaseModel):
+    rank: int
+    user_id: str
+    username: str
+    emoji: str
+    score: int
+    games_played: int
+    wins: int
+    losses: int
+    win_rate: int
+    current_streak: int
+    max_streak: int
+    avg_guesses: float | None = None
+    hint_games: int = 0
+    hint_wins: int = 0
+
+class LeaderboardResponse(BaseModel):
+    scope: str
+    entries: list[LeaderboardEntry]
+    current_user: LeaderboardEntry | None = None
+    scoring: dict[str, Any]
+
 @app.get("/")
 def read_root():
     return {"message": "Welcome to World Unlimited API"}
@@ -191,6 +247,36 @@ def read_root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+def _scoring_rules() -> dict[str, Any]:
+    return {
+        "base_points": {"easy": 100, "moderate": 140, "difficult": 180, "prodigy": 250},
+        "efficiency_bonus": "10 * remaining guesses",
+        "no_hint_bonus": 15,
+        "hint_penalty": "10 * hints used",
+        "loss_points": 0,
+        "formula": "base win points + efficiency bonus + no-hint bonus - hint penalty",
+    }
+
+@app.post("/players/register", response_model=PlayerRegisterResponse)
+def register_public_player(req: PlayerRegisterRequest):
+    try:
+        return register_player(req.username, req.emoji, req.user_id, req.leaderboard_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "taken" in str(exc).lower() else 400, detail=str(exc))
+
+@app.get("/players/check-username", response_model=UsernameAvailabilityResponse)
+def check_public_username(username: str):
+    try:
+        normalized = validate_username(username)
+        return UsernameAvailabilityResponse(username=normalized, available=username_available(normalized), valid=True)
+    except ValueError as exc:
+        return UsernameAvailabilityResponse(username=username.strip().lower(), available=False, valid=False, message=str(exc))
+
+@app.get("/leaderboard", response_model=LeaderboardResponse)
+def read_leaderboard(scope: str = "overall", limit: int = 50, player_id: str | None = None):
+    data = get_leaderboard(scope, limit, player_id)
+    return LeaderboardResponse(**data, scoring=_scoring_rules())
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -255,6 +341,7 @@ def _create_session(difficulty: str) -> str:
         "hint_assisted": False,
         "game_over": False,
         "won": False,
+        "leaderboard_participants": {},
         "typing_player_id": None,
         "typing_player_name": None,
         "typing_player_emoji": None,
@@ -450,6 +537,37 @@ def _active_session_id(room: dict[str, Any], player_id: str) -> str:
         return room["player_sessions"][player_id]
     return room["active_shared_session_id"] or room["player_sessions"][player_id]
 
+def _remember_room_leaderboard_player(room: dict[str, Any], player_id: str, leaderboard_user_id: str | None, leaderboard_token: str | None) -> None:
+    if not leaderboard_user_id or not leaderboard_token or player_id not in room.get("players", {}):
+        return
+    room["players"][player_id]["leaderboard_user_id"] = leaderboard_user_id
+    room["players"][player_id]["leaderboard_token"] = leaderboard_token
+
+def _mark_session_participant(session_id: str, leaderboard_user_id: str | None, leaderboard_token: str | None) -> None:
+    if not leaderboard_user_id or not leaderboard_token or session_id not in sessions:
+        return
+    sessions[session_id].setdefault("leaderboard_participants", {})[leaderboard_user_id] = leaderboard_token
+
+def _record_session_results(session_id: str, only_user_id: str | None = None, only_token: str | None = None) -> None:
+    if session_id not in sessions:
+        return
+    session = sessions[session_id]
+    if not session.get("game_over"):
+        return
+    participants = dict(session.get("leaderboard_participants", {}))
+    if only_user_id and only_token:
+        participants[only_user_id] = only_token
+    for leaderboard_user_id, token in participants.items():
+        record_result(
+            session_id=session_id,
+            user_id=leaderboard_user_id,
+            token=token,
+            difficulty=session["difficulty"],
+            won=bool(session.get("won")),
+            guesses=len(session.get("guesses", [])),
+            hints_used=int(session.get("hints_used", 0)),
+        )
+
 def _submit_guess_to_session(session_id: str, guess: str) -> GuessResponse:
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -495,13 +613,18 @@ def _submit_guess_to_session(session_id: str, guess: str) -> GuessResponse:
     )
 
 @app.get("/word", response_model=GameCreateResponse)
-def create_game(difficulty: str = "easy"):
+def create_game(difficulty: str = "easy", leaderboard_user_id: str | None = None, leaderboard_token: str | None = None):
     session_id = _create_session(difficulty)
+    _mark_session_participant(session_id, leaderboard_user_id, leaderboard_token)
     return GameCreateResponse(session_id=session_id, length=len(sessions[session_id]["word"]))
 
 @app.post("/guess", response_model=GuessResponse)
 def submit_guess(req: GuessRequest):
-    return _submit_guess_to_session(req.session_id, req.guess)
+    _mark_session_participant(req.session_id, req.leaderboard_user_id, req.leaderboard_token)
+    response = _submit_guess_to_session(req.session_id, req.guess)
+    if response.game_over:
+        _record_session_results(req.session_id, req.leaderboard_user_id, req.leaderboard_token)
+    return response
 
 @app.post("/rooms", response_model=RoomJoinResponse)
 def create_room(req: RoomCreateRequest):
@@ -530,6 +653,8 @@ def create_room(req: RoomCreateRequest):
                 "player_id": player_id,
                 "player_name": player_name,
                 "player_emoji": player_emoji,
+                "leaderboard_user_id": req.leaderboard_user_id,
+                "leaderboard_token": req.leaderboard_token,
                 "joined_at": _now_iso(),
                 "last_active_at": _now_iso(),
             }
@@ -558,6 +683,8 @@ def join_room(room_id: str, req: RoomJoinRequest):
         "player_id": player_id,
         "player_name": _clean_player_name(req.player_name),
         "player_emoji": _clean_player_emoji(req.player_emoji),
+        "leaderboard_user_id": req.leaderboard_user_id or rooms[room_id]["players"].get(player_id, {}).get("leaderboard_user_id"),
+        "leaderboard_token": req.leaderboard_token or rooms[room_id]["players"].get(player_id, {}).get("leaderboard_token"),
         "joined_at": rooms[room_id]["players"].get(player_id, {}).get("joined_at", _now_iso()),
         "last_active_at": _now_iso(),
     }
@@ -574,7 +701,13 @@ def submit_room_guess(room_id: str, req: RoomGuessRequest):
     room_id = room_id.strip().upper()
     room = _require_room_player(room_id, req.player_id)
 
-    _submit_guess_to_session(_active_session_id(room, req.player_id), req.guess)
+    _remember_room_leaderboard_player(room, req.player_id, req.leaderboard_user_id, req.leaderboard_token)
+    session_id = _active_session_id(room, req.player_id)
+    player = room["players"][req.player_id]
+    _mark_session_participant(session_id, player.get("leaderboard_user_id"), player.get("leaderboard_token"))
+    response = _submit_guess_to_session(session_id, req.guess)
+    if response.game_over:
+        _record_session_results(session_id)
     _touch_room(room, req.player_id)
     return _room_state(room_id, req.player_id)
 
@@ -589,6 +722,12 @@ def update_room_input(room_id: str, req: RoomInputRequest):
         raise HTTPException(status_code=400, detail="Invalid current guess")
 
     if not session.get("game_over"):
+        player = room["players"][req.player_id]
+        _mark_session_participant(
+            _active_session_id(room, req.player_id),
+            player.get("leaderboard_user_id"),
+            player.get("leaderboard_token"),
+        )
         session["current_guess"] = guess
         server_version = session.get("input_version", 0) + 1
         if req.client_input_version is not None:
