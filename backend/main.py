@@ -653,6 +653,13 @@ def create_game(difficulty: str = "easy", leaderboard_user_id: str | None = None
     _mark_session_participant(session_id, leaderboard_user_id, leaderboard_token)
     return GameCreateResponse(session_id=session_id, length=len(sessions[session_id]["word"]))
 
+@app.get("/sessions/{session_id}", response_model=BoardState)
+def get_session_state(session_id: str):
+    board = _board_state(session_id)
+    if not board:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return board
+
 @app.post("/guess", response_model=GuessResponse)
 def submit_guess(req: GuessRequest):
     _mark_session_participant(req.session_id, req.leaderboard_user_id, req.leaderboard_token)

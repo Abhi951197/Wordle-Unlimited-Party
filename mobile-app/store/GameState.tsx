@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 import { trackEvent } from '@/utils/analytics';
 
 interface Stats {
@@ -292,6 +293,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const localInputVersion = useRef(0);
   const lastGuessCountRef = useRef(0);
   const localDraftActiveRef = useRef(false);
+  const locallyRecordedSessionsRef = useRef<Set<string>>(new Set());
+  const pendingSubmitRecoveryRef = useRef<{ guess: string; createdAt: number } | null>(null);
 
   useEffect(() => {
     latestRoomRef.current = { roomId, playerId };
@@ -304,6 +307,29 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const retry = async () => {
+      const pending = pendingSubmitRecoveryRef.current;
+      if (!pending) return;
+      if (Date.now() - pending.createdAt > 120000) {
+        pendingSubmitRecoveryRef.current = null;
+        return;
+      }
+      const recovered = await recoverSubmittedGuess(pending.guess);
+      if (recovered) {
+        pendingSubmitRecoveryRef.current = null;
+        showToast('Guess synced', 'info');
+      }
+    };
+    window.addEventListener('online', retry);
+    const timer = setInterval(retry, 2500);
+    return () => {
+      window.removeEventListener('online', retry);
+      clearInterval(timer);
+    };
+  }, [roomId, playerId]);
 
   useEffect(() => {
     AsyncStorage.getItem('word_unlimited_stats').then(val => {
@@ -629,6 +655,38 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       hints_used: data.hints_used ?? 0,
       hints: data.hints ?? [],
     });
+  };
+
+  const recordRecoveredSoloCompletion = async (board: BoardState) => {
+    if (roomId || !board.game_over || locallyRecordedSessionsRef.current.has(board.session_id)) return;
+    locallyRecordedSessionsRef.current.add(board.session_id);
+    await saveAndSetStats(buildUpdatedStats(!!board.won, board.guesses?.length ?? 0, (board.hints_used ?? 0) > 0));
+  };
+
+  const recoverSubmittedGuess = async (submittedGuess: string) => {
+    try {
+      if (roomId && playerId) {
+        const res = await fetch(`${API_URL}/rooms/${roomId}?player_id=${playerId}`);
+        if (!res.ok) return false;
+        const data = await res.json();
+        const active = data.active_board === 'individual' ? data.individual_board : data.shared_board;
+        const landed = !!active?.guesses?.includes(submittedGuess) || !!data.guesses?.includes(submittedGuess);
+        applyRoomState(data, playerId);
+        return landed || !!active?.game_over || !!data.game_over;
+      }
+
+      const activeSessionId = sessionIdRef.current;
+      if (!activeSessionId) return false;
+      const res = await fetch(`${API_URL}/sessions/${activeSessionId}`);
+      if (!res.ok) return false;
+      const board: BoardState = await res.json();
+      const landed = !!board.guesses?.includes(submittedGuess);
+      applyBoard(board);
+      await recordRecoveredSoloCompletion(board);
+      return landed || !!board.game_over;
+    } catch {
+      return false;
+    }
   };
 
   const persistRoom = async (data: any, name: string, emoji: string) => {
@@ -986,6 +1044,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     try {
       submittingRef.current = true;
+      pendingSubmitRecoveryRef.current = { guess, createdAt: Date.now() };
       if (inputSyncTimer.current) clearTimeout(inputSyncTimer.current);
       inputSyncSeq.current += 1;
       const endpoint = roomId && playerId ? `${API_URL}/rooms/${roomId}/guess` : `${API_URL}/guess`;
@@ -1014,7 +1073,14 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return;
       }
       if (res.status === 409) {
-        showToast('That guess is already being submitted', 'warning');
+        const recovered = await recoverSubmittedGuess(guess);
+        if (recovered) {
+          pendingSubmitRecoveryRef.current = null;
+          showToast('Guess synced', 'info');
+        } else {
+          pendingSubmitRecoveryRef.current = null;
+          showToast('That guess is already being submitted', 'warning');
+        }
         return;
       }
       if (!res.ok) {
@@ -1024,6 +1090,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
 
       const data = await res.json();
+      pendingSubmitRecoveryRef.current = null;
       setLastSubmittedRow(guesses.length);
       setCurrentGuess('');
       currentGuessRef.current = '';
@@ -1061,6 +1128,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       setTimeout(() => {
         if (data.won) {
+          locallyRecordedSessionsRef.current.add(sessionId);
           setAnswer(data.answer);
           setAnswerInfo(data.answer_info ?? null);
           setHintsUsed(data.hints_used ?? hintsUsed);
@@ -1068,6 +1136,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           saveAndSetStats(buildUpdatedStats(true, newGuesses.length, (data.hints_used ?? hintsUsed) > 0));
           trackEvent('Game Won', { mode: 'solo', difficulty, guesses: newGuesses.length });
         } else if (data.game_over) {
+          locallyRecordedSessionsRef.current.add(sessionId);
           setAnswer(data.answer);
           setAnswerInfo(data.answer_info ?? null);
           setHintsUsed(data.hints_used ?? hintsUsed);
@@ -1077,7 +1146,14 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }
       }, 1600);
     } catch {
-      showToast('Network error - check your connection', 'error');
+      const recovered = await recoverSubmittedGuess(guess);
+      if (recovered) {
+        pendingSubmitRecoveryRef.current = null;
+        showToast('Connection recovered - guess synced', 'info');
+      } else {
+        pendingSubmitRecoveryRef.current = { guess, createdAt: Date.now() };
+        showToast('Network is slow - try again when connected', 'warning');
+      }
     } finally {
       setTimeout(() => {
         submittingRef.current = false;
