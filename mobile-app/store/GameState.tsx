@@ -579,24 +579,17 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const previousSessionId = sessionIdRef.current;
     const sessionChanged = board.session_id !== previousSessionId;
     const guessCountChanged = nextGuessCount !== lastGuessCountRef.current;
-    const boardAdvanced = guessCountChanged || sessionChanged;
     const serverInputVersion = board.input_version ?? 0;
     if (sessionChanged) {
       localDraftActiveRef.current = false;
       currentGuessRef.current = '';
     }
-    const shouldApplyServerGuess = !roomId || sessionChanged || guessCountChanged;
-    const shouldKeepLocalGuess = !shouldApplyServerGuess
-      || (
-        !!roomId
-        && board.session_id === previousSessionId
-        && !boardAdvanced
-        && (
-          localDraftActiveRef.current
-          || currentGuessRef.current.length > 0
-          || Date.now() - lastLocalInputAt.current < 1200
-          || serverInputVersion < localInputVersion.current
-        )
+    const shouldKeepLocalGuess = !sessionChanged
+      && !guessCountChanged
+      && (
+        localDraftActiveRef.current
+        || Date.now() - lastLocalInputAt.current < 1500
+        || (currentGuessRef.current.length > 0 && serverInputVersion <= localInputVersion.current)
       );
     setSessionId(board.session_id);
     sessionIdRef.current = board.session_id;
