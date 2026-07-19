@@ -1067,6 +1067,12 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return;
     }
 
+    if (guesses.some(submittedGuess => submittedGuess.toUpperCase() === guess.toUpperCase())) {
+      triggerShake();
+      showToast('Guess already submitted', 'warning');
+      return;
+    }
+
     const isModerateOrHard = ['moderate', 'difficult', 'prodigy'].includes(difficulty);
     const isHardOrProdigy = ['difficult', 'prodigy'].includes(difficulty);
 

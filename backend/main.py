@@ -614,7 +614,7 @@ def _submit_guess_to_session(session_id: str, guess: str) -> GuessResponse:
     if session.get("game_over"):
         raise HTTPException(status_code=409, detail="Game already finished")
 
-    if session["guesses"] and session["guesses"][-1] == guess:
+    if guess in session["guesses"]:
         raise HTTPException(status_code=409, detail="Duplicate guess")
 
     if len(guess) != len(target_word):
