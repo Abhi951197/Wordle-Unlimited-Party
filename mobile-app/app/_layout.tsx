@@ -13,10 +13,18 @@ export const unstable_settings = {
 };
 
 const SITE_URL = 'https://wordle-unlimited-party.vercel.app';
-const SITE_TITLE = 'Wordle Unlimited Party - Multiplayer Word Game';
+const SITE_TITLE = 'Wordle Unlimited Party – Multiplayer Word Game';
 const SITE_DESCRIPTION = 'Play Wordle Unlimited Party online with friends. Enjoy unlimited puzzles, real-time multiplayer, voice chat, hints, and multiple difficulty levels for free.';
 
-const structuredData = {
+const websiteStructuredData = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: 'Wordle Unlimited Party',
+  alternateName: 'Wordle Party',
+  url: `${SITE_URL}/`,
+};
+
+const appStructuredData = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
   name: 'Wordle Unlimited Party',
@@ -50,6 +58,7 @@ export default function RootLayout() {
           <meta name="description" content={SITE_DESCRIPTION} />
           <meta name="robots" content="index,follow" />
           <meta name="theme-color" content="#16C75A" />
+          <meta name="application-name" content="Wordle Unlimited Party" />
           <link rel="canonical" href={SITE_URL} />
           <link rel="icon" type="image/png" href="/favicon.png" />
           <link rel="apple-touch-icon" href="/favicon.png" />
@@ -65,7 +74,8 @@ export default function RootLayout() {
           <meta name="twitter:title" content={SITE_TITLE} />
           <meta name="twitter:description" content={SITE_DESCRIPTION} />
           <meta name="twitter:image" content={`${SITE_URL}/party-illustration.png`} />
-          <script type="application/ld+json">{JSON.stringify(structuredData)}</script>
+          <script type="application/ld+json">{JSON.stringify(websiteStructuredData)}</script>
+          <script type="application/ld+json">{JSON.stringify(appStructuredData)}</script>
         </Head>
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

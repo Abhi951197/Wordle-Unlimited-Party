@@ -96,12 +96,14 @@ export function SeoInfoPage({ path, title, description, eyebrow, sections }: Seo
         <title>{title}</title>
         <meta name="description" content={description} />
         <meta name="robots" content="index,follow" />
+        <meta name="application-name" content="Wordle Unlimited Party" />
         <link rel="canonical" href={canonical} />
         <link rel="icon" type="image/png" href="/favicon.png" />
         <link rel="apple-touch-icon" href="/favicon.png" />
         <meta property="og:title" content={title} />
         <meta property="og:description" content={description} />
         <meta property="og:url" content={canonical} />
+        <meta property="og:site_name" content="Wordle Unlimited Party" />
         <meta property="og:image" content={`${SITE_URL}/party-illustration.png`} />
         <meta name="twitter:title" content={title} />
         <meta name="twitter:description" content={description} />

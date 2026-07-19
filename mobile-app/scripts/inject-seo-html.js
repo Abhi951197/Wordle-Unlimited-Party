@@ -2,6 +2,47 @@ const fs = require('fs');
 const path = require('path');
 
 const DIST_DIR = path.resolve(__dirname, '..', 'dist');
+const SITE_URL = 'https://wordle-unlimited-party.vercel.app';
+const SITE_NAME = 'Wordle Unlimited Party';
+const SITE_TITLE = 'Wordle Unlimited Party – Multiplayer Word Game';
+const SITE_DESCRIPTION = 'Play Wordle Unlimited Party online with friends. Enjoy unlimited puzzles, real-time multiplayer, voice chat, hints, and multiple difficulty levels for free.';
+
+const websiteStructuredData = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: SITE_NAME,
+  alternateName: 'Wordle Party',
+  url: `${SITE_URL}/`,
+};
+
+function upsertMeta(html, attr, value, tag) {
+  const pattern = new RegExp(`<meta\\s+${attr}=["']${value}["'][^>]*>`, 'i');
+  if (pattern.test(html)) {
+    return html.replace(pattern, tag);
+  }
+  return html.replace('</head>', `${tag}</head>`);
+}
+
+function ensureHeadSignals(html) {
+  html = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${SITE_TITLE}</title>`);
+  if (!/<title>[\s\S]*?<\/title>/i.test(html)) {
+    html = html.replace('</head>', `<title>${SITE_TITLE}</title></head>`);
+  }
+
+  html = upsertMeta(html, 'name', 'description', `<meta name="description" content="${SITE_DESCRIPTION}">`);
+  html = upsertMeta(html, 'name', 'application-name', `<meta name="application-name" content="${SITE_NAME}">`);
+  html = upsertMeta(html, 'property', 'og:site_name', `<meta property="og:site_name" content="${SITE_NAME}">`);
+  html = upsertMeta(html, 'property', 'og:title', `<meta property="og:title" content="${SITE_TITLE}">`);
+
+  if (!html.includes('"@type":"WebSite"') && !html.includes('"@type": "WebSite"')) {
+    html = html.replace(
+      '</head>',
+      `<script type="application/ld+json">${JSON.stringify(websiteStructuredData)}</script></head>`
+    );
+  }
+
+  return html;
+}
 
 const pages = [
   {
@@ -140,6 +181,7 @@ for (const page of pages) {
     if (!fs.existsSync(filePath)) continue;
 
     let html = fs.readFileSync(filePath, 'utf8');
+    html = ensureHeadSignals(html);
     html = html
       .replace(/<main id="seo-content"[\s\S]*?<\/main>/, '')
       .replace(/<style id="seo-content-style">[\s\S]*?<\/style>/, '')
