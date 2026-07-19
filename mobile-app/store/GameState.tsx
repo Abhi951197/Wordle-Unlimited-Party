@@ -320,7 +320,6 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const recovered = await recoverSubmittedGuess(pending.guess);
       if (recovered) {
         pendingSubmitRecoveryRef.current = null;
-        showToast('Guess synced', 'info');
       }
     };
     window.addEventListener('online', retry);
@@ -1069,7 +1068,6 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const recovered = await recoverSubmittedGuess(guess);
         if (recovered) {
           pendingSubmitRecoveryRef.current = null;
-          showToast('Guess synced', 'info');
         } else {
           pendingSubmitRecoveryRef.current = null;
           showToast('That guess is already being submitted', 'warning');
@@ -1142,7 +1140,6 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const recovered = await recoverSubmittedGuess(guess);
       if (recovered) {
         pendingSubmitRecoveryRef.current = null;
-        showToast('Connection recovered - guess synced', 'info');
       } else {
         pendingSubmitRecoveryRef.current = { guess, createdAt: Date.now() };
         showToast('Network is slow - try again when connected', 'warning');
