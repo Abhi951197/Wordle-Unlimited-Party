@@ -241,6 +241,7 @@ const defaultStats: Stats = {
 };
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const STATS_STORAGE_KEY = 'word_unlimited_stats';
 const ROOM_STORAGE_KEY = 'word_party_room';
 const LEADERBOARD_PROFILE_KEY = 'word_leaderboard_profile';
 
@@ -331,7 +332,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [roomId, playerId]);
 
   useEffect(() => {
-    AsyncStorage.getItem('word_unlimited_stats').then(val => {
+    AsyncStorage.getItem(STATS_STORAGE_KEY).then(val => {
       if (val) setStats(normalizeStats(JSON.parse(val)));
     });
     AsyncStorage.getItem(LEADERBOARD_PROFILE_KEY).then(val => {
@@ -342,6 +343,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setLeaderboardProfile(saved);
           setPlayerName(saved.username);
           setPlayerEmoji(saved.emoji || '🙂');
+          void hydrateStatsFromPublicProfile(saved.user_id);
         }
       } catch {
         AsyncStorage.removeItem(LEADERBOARD_PROFILE_KEY);
@@ -399,19 +401,72 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     hintWins: raw?.hintWins ?? 0,
     currentStreak: raw?.currentStreak ?? 0,
     maxStreak: raw?.maxStreak ?? 0,
-    guessDistribution: Array.isArray(raw?.guessDistribution) ? raw.guessDistribution : [0, 0, 0, 0, 0, 0],
+    guessDistribution: Array.isArray(raw?.guessDistribution) ? raw.guessDistribution.slice(0, 6).concat([0, 0, 0, 0, 0, 0]).slice(0, 6) : [0, 0, 0, 0, 0, 0],
     byDifficulty: raw?.byDifficulty ?? {},
   });
+
+  const statsScopeToDifficultyStats = (scope?: PublicStatsScope | null): DifficultyStats => ({
+    ...emptyDifficultyStats(),
+    gamesPlayed: scope?.games_played ?? 0,
+    wins: scope?.wins ?? 0,
+    losses: scope?.losses ?? 0,
+    hintGames: scope?.hint_games ?? 0,
+    hintWins: scope?.hint_wins ?? 0,
+    currentStreak: scope?.current_streak ?? 0,
+    maxStreak: scope?.max_streak ?? 0,
+    guessDistribution: Array.isArray(scope?.guess_distribution) ? scope.guess_distribution.slice(0, 6).concat([0, 0, 0, 0, 0, 0]).slice(0, 6) : [0, 0, 0, 0, 0, 0],
+  });
+
+  const publicProfileToStats = (profile: PublicProfile): Stats => {
+    const overall = profile.all_time?.overall;
+    const byDifficulty = ['easy', 'moderate', 'difficult', 'prodigy'].reduce<Record<string, DifficultyStats>>((acc, key) => {
+      acc[key] = statsScopeToDifficultyStats(profile.all_time?.[key]);
+      return acc;
+    }, {});
+
+    return normalizeStats({
+      gamesPlayed: overall?.games_played ?? 0,
+      wins: overall?.wins ?? 0,
+      hintGames: overall?.hint_games ?? 0,
+      hintWins: overall?.hint_wins ?? 0,
+      currentStreak: overall?.current_streak ?? 0,
+      maxStreak: overall?.max_streak ?? 0,
+      guessDistribution: overall?.guess_distribution ?? [0, 0, 0, 0, 0, 0],
+      byDifficulty,
+    });
+  };
+
+  const hydrateStatsFromPublicProfile = async (userId: string) => {
+    try {
+      const res = await fetch(`${API_URL}/players/${encodeURIComponent(userId)}/public-profile`);
+      if (!res.ok) return;
+      const profile: PublicProfile = await res.json();
+      const remoteStats = publicProfileToStats(profile);
+      const storedValue = await AsyncStorage.getItem(STATS_STORAGE_KEY);
+      const storedStats = storedValue ? normalizeStats(JSON.parse(storedValue)) : normalizeStats(stats);
+      if (remoteStats.gamesPlayed < storedStats.gamesPlayed) return;
+      setStats(remoteStats);
+      await AsyncStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(remoteStats));
+    } catch {
+      // Public stats hydration is best-effort and should not interrupt gameplay.
+    }
+  };
 
   const saveAndSetStats = async (s: Stats) => {
     const normalized = normalizeStats(s);
     setStats(normalized);
-    await AsyncStorage.setItem('word_unlimited_stats', JSON.stringify(normalized));
+    await AsyncStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(normalized));
   };
 
-  const buildUpdatedStats = (didWin: boolean, guessCount: number, usedHints = hintsUsed > 0) => {
-    const nextStats = normalizeStats(stats);
-    const diffStats = { ...emptyDifficultyStats(), ...(nextStats.byDifficulty[difficulty] ?? {}) };
+  const buildUpdatedStats = (
+    didWin: boolean,
+    guessCount: number,
+    usedHints = hintsUsed > 0,
+    baseStats: Stats = stats,
+    statDifficulty = difficulty,
+  ) => {
+    const nextStats = normalizeStats(baseStats);
+    const diffStats = { ...emptyDifficultyStats(), ...(nextStats.byDifficulty[statDifficulty] ?? {}) };
     const overallGuessDistribution = [...nextStats.guessDistribution];
     const diffGuessDistribution = [...diffStats.guessDistribution];
 
@@ -443,8 +498,18 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     nextStats.guessDistribution = overallGuessDistribution;
     diffStats.guessDistribution = diffGuessDistribution;
-    nextStats.byDifficulty = { ...nextStats.byDifficulty, [difficulty]: diffStats };
+    nextStats.byDifficulty = { ...nextStats.byDifficulty, [statDifficulty]: diffStats };
     return nextStats;
+  };
+
+  const saveCompletedStats = async (didWin: boolean, guessCount: number, usedHints = hintsUsed > 0, statDifficulty = difficulty) => {
+    const storedValue = await AsyncStorage.getItem(STATS_STORAGE_KEY);
+    const baseStats = storedValue ? normalizeStats(JSON.parse(storedValue)) : normalizeStats(stats);
+    const nextStats = buildUpdatedStats(didWin, guessCount, usedHints, baseStats, statDifficulty);
+    await saveAndSetStats(nextStats);
+    if (leaderboardProfile?.user_id) {
+      setTimeout(() => void hydrateStatsFromPublicProfile(leaderboardProfile.user_id), 700);
+    }
   };
 
   const showToast = (message: string, type: Toast['type'] = 'error') => {
@@ -480,6 +545,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setPlayerName(profile.username);
       setPlayerEmoji(profile.emoji);
       await AsyncStorage.setItem(LEADERBOARD_PROFILE_KEY, JSON.stringify(profile));
+      void hydrateStatsFromPublicProfile(profile.user_id);
       showToast('Leaderboard profile ready', 'info');
       return true;
     } catch {
@@ -652,7 +718,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const recordRecoveredSoloCompletion = async (board: BoardState) => {
     if (roomId || !board.game_over || locallyRecordedSessionsRef.current.has(board.session_id)) return;
     locallyRecordedSessionsRef.current.add(board.session_id);
-    await saveAndSetStats(buildUpdatedStats(!!board.won, board.guesses?.length ?? 0, (board.hints_used ?? 0) > 0));
+    await saveCompletedStats(!!board.won, board.guesses?.length ?? 0, (board.hints_used ?? 0) > 0, board.difficulty);
   };
 
   const recoverSubmittedGuess = async (submittedGuess: string) => {
@@ -1124,7 +1190,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setAnswerInfo(data.answer_info ?? null);
           setHintsUsed(data.hints_used ?? hintsUsed);
           setGameStatus('won');
-          saveAndSetStats(buildUpdatedStats(true, newGuesses.length, (data.hints_used ?? hintsUsed) > 0));
+          saveCompletedStats(true, newGuesses.length, (data.hints_used ?? hintsUsed) > 0, difficulty);
           trackEvent('Game Won', { mode: 'solo', difficulty, guesses: newGuesses.length });
         } else if (data.game_over) {
           locallyRecordedSessionsRef.current.add(sessionId);
@@ -1132,7 +1198,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setAnswerInfo(data.answer_info ?? null);
           setHintsUsed(data.hints_used ?? hintsUsed);
           setGameStatus('lost');
-          saveAndSetStats(buildUpdatedStats(false, newGuesses.length, (data.hints_used ?? hintsUsed) > 0));
+          saveCompletedStats(false, newGuesses.length, (data.hints_used ?? hintsUsed) > 0, difficulty);
           trackEvent('Game Lost', { mode: 'solo', difficulty, guesses: newGuesses.length });
         }
       }, 1600);
