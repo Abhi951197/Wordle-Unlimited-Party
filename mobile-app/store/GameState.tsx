@@ -500,12 +500,22 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (!storedValue) return;
       const localStats = normalizeStats(JSON.parse(storedValue));
       if (!localStats.gamesPlayed) return;
-      const importKey = `${STATS_IMPORT_PREFIX}${profile.user_id}_${localStats.gamesPlayed}_${localStats.wins}_${localStats.maxStreak}`;
-      if (await AsyncStorage.getItem(importKey)) return;
       const weekKey = getUtcWeekKey();
       const weeklyValue = await AsyncStorage.getItem(WEEKLY_STATS_STORAGE_KEY);
       const weekly = weeklyValue ? JSON.parse(weeklyValue) : null;
       const weeklyStats = weekly?.weekKey === weekKey ? normalizeStats(weekly.stats) : null;
+      const importKey = [
+        STATS_IMPORT_PREFIX,
+        profile.user_id,
+        localStats.gamesPlayed,
+        localStats.wins,
+        localStats.maxStreak,
+        weekKey,
+        weeklyStats?.gamesPlayed ?? 0,
+        weeklyStats?.wins ?? 0,
+        weeklyStats?.maxStreak ?? 0,
+      ].join('_');
+      if (await AsyncStorage.getItem(importKey)) return;
       const res = await fetch(`${API_URL}/players/stats/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -685,6 +695,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const fetchLeaderboard = async (scope = 'overall', period: 'weekly' | 'all_time' = 'weekly') => {
     try {
+      if (leaderboardProfile) {
+        await syncLocalStatsToLeaderboard(leaderboardProfile);
+      }
       const current = leaderboardProfile?.user_id ? `&player_id=${encodeURIComponent(leaderboardProfile.user_id)}` : '';
       const res = await fetch(`${API_URL}/leaderboard?scope=${encodeURIComponent(scope)}&period=${encodeURIComponent(period)}&limit=50${current}`);
       if (!res.ok) throw new Error('leaderboard');
