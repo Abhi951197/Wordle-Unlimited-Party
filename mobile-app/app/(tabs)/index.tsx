@@ -1224,7 +1224,7 @@ export default function GameScreen() {
                 <TouchableOpacity style={styles.outlineBtn} onPress={createIndividualGame}><Text style={styles.outlineText}>Play Individually</Text></TouchableOpacity>
               </>
             ) : (
-              <TouchableOpacity style={styles.primaryBtn} onPress={() => startGame(difficulty)}><Text style={styles.primaryText}>Play Again</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.primaryBtn} onPress={() => startGame(dailyDate ? 'easy' : difficulty)}><Text style={styles.primaryText}>{dailyDate ? 'Play Unlimited' : 'Play Again'}</Text></TouchableOpacity>
             )}
           </View>
         </View>

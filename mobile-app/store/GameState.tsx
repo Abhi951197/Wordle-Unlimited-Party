@@ -296,6 +296,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   });
   const currentGuessRef = useRef('');
   const sessionIdRef = useRef<string | null>(null);
+  const dailyDateRef = useRef<string | null>(null);
   const submittingRef = useRef(false);
   const inputSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputSyncSeq = useRef(0);
@@ -317,6 +318,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    dailyDateRef.current = dailyDate;
+  }, [dailyDate]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
@@ -612,13 +617,14 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const recordDailyCompletion = async (didWin: boolean, completedDate: string | null) => {
-    if (!completedDate) return;
+    if (!completedDate) return null;
     try {
       const storedValue = await AsyncStorage.getItem(DAILY_STORAGE_KEY);
       const saved = storedValue ? JSON.parse(storedValue) : {};
       if (saved?.lastPlayedDate === completedDate) {
-        setDailyStreak(saved?.streak ?? 0);
-        return;
+        const savedStreak = saved?.streak ?? 0;
+        setDailyStreak(savedStreak);
+        return savedStreak;
       }
       const yesterday = new Date(`${completedDate}T00:00:00Z`);
       yesterday.setUTCDate(yesterday.getUTCDate() - 1);
@@ -635,8 +641,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       };
       setDailyStreak(nextStreak);
       await AsyncStorage.setItem(DAILY_STORAGE_KEY, JSON.stringify(next));
+      return nextStreak;
     } catch {
       // Daily streaks are local-only and should never block result display.
+      return null;
     }
   };
 
@@ -789,6 +797,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       );
     setSessionId(board.session_id);
     sessionIdRef.current = board.session_id;
+    if (board.daily_date !== undefined) {
+      const nextDailyDate = board.daily_date ?? null;
+      setDailyDate(nextDailyDate);
+      dailyDateRef.current = nextDailyDate;
+    }
     setWordLength(board.length);
     setDifficulty(board.difficulty);
     setGuesses(board.guesses ?? []);
@@ -850,6 +863,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (roomId || !board.game_over || locallyRecordedSessionsRef.current.has(board.session_id)) return;
     locallyRecordedSessionsRef.current.add(board.session_id);
     await saveCompletedStats(!!board.won, board.guesses?.length ?? 0, (board.hints_used ?? 0) > 0, board.difficulty);
+    await recordDailyCompletion(!!board.won, board.daily_date ?? dailyDateRef.current);
   };
 
   const recoverSubmittedGuess = async (submittedGuess: string) => {
@@ -896,6 +910,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const data = await res.json();
       resetBoardState();
       setDailyDate(null);
+      dailyDateRef.current = null;
       setSessionId(data.session_id);
       sessionIdRef.current = data.session_id;
       setRoomId(null);
@@ -941,7 +956,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       resetBoardState();
       setSessionId(data.session_id);
       sessionIdRef.current = data.session_id;
-      setDailyDate(data.daily_date ?? null);
+      const nextDailyDate = data.daily_date ?? null;
+      setDailyDate(nextDailyDate);
+      dailyDateRef.current = nextDailyDate;
       setRoomId(null);
       setPlayerId(null);
       setPlayerEmoji('🙂');
@@ -1366,24 +1383,25 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
       setLetterStates(newStates);
 
-      setTimeout(() => {
+      setTimeout(async () => {
+        const completedDailyDate = dailyDateRef.current;
         if (data.won) {
           locallyRecordedSessionsRef.current.add(sessionId);
           setAnswer(data.answer);
           setAnswerInfo(data.answer_info ?? null);
           setHintsUsed(data.hints_used ?? hintsUsed);
+          await saveCompletedStats(true, newGuesses.length, (data.hints_used ?? hintsUsed) > 0, difficulty);
+          await recordDailyCompletion(true, completedDailyDate);
           setGameStatus('won');
-          saveCompletedStats(true, newGuesses.length, (data.hints_used ?? hintsUsed) > 0, difficulty);
-          recordDailyCompletion(true, dailyDate);
           trackEvent('Game Won', { mode: 'solo', difficulty, guesses: newGuesses.length });
         } else if (data.game_over) {
           locallyRecordedSessionsRef.current.add(sessionId);
           setAnswer(data.answer);
           setAnswerInfo(data.answer_info ?? null);
           setHintsUsed(data.hints_used ?? hintsUsed);
+          await saveCompletedStats(false, newGuesses.length, (data.hints_used ?? hintsUsed) > 0, difficulty);
+          await recordDailyCompletion(false, completedDailyDate);
           setGameStatus('lost');
-          saveCompletedStats(false, newGuesses.length, (data.hints_used ?? hintsUsed) > 0, difficulty);
-          recordDailyCompletion(false, dailyDate);
           trackEvent('Game Lost', { mode: 'solo', difficulty, guesses: newGuesses.length });
         }
       }, 1600);
