@@ -259,6 +259,7 @@ def init_db() -> None:
             )
         """)
         _backfill_stats_from_results(conn)
+        _repair_leaderboard_stats(conn)
 
 
 def _backfill_stats_from_results(conn) -> None:
@@ -320,6 +321,131 @@ def _backfill_stats_from_results(conn) -> None:
             """,
             (*counts, stat["user_id"], stat["scope"]),
         )
+
+
+def _copy_period_row_to_player_stats(conn, row: dict[str, Any]) -> None:
+    _execute(
+        conn,
+        """
+        UPDATE player_stats
+        SET score = ?, games_played = ?, wins = ?, losses = ?, current_streak = ?, max_streak = ?,
+            total_guesses = ?, hint_games = ?, hint_wins = ?,
+            guess_1 = ?, guess_2 = ?, guess_3 = ?, guess_4 = ?, guess_5 = ?, guess_6 = ?, updated_at = ?
+        WHERE user_id = ? AND scope = ?
+        """,
+        (
+            int(row.get("score") or 0),
+            int(row.get("games_played") or 0),
+            int(row.get("wins") or 0),
+            int(row.get("losses") or 0),
+            int(row.get("current_streak") or 0),
+            int(row.get("max_streak") or 0),
+            int(row.get("total_guesses") or 0),
+            int(row.get("hint_games") or 0),
+            int(row.get("hint_wins") or 0),
+            int(row.get("guess_1") or 0),
+            int(row.get("guess_2") or 0),
+            int(row.get("guess_3") or 0),
+            int(row.get("guess_4") or 0),
+            int(row.get("guess_5") or 0),
+            int(row.get("guess_6") or 0),
+            row.get("updated_at") or _now_iso(),
+            row["user_id"],
+            row["scope"],
+        ),
+    )
+
+
+def _upsert_all_time_period_from_player_stats(conn, row: dict[str, Any]) -> None:
+    existing = _row_to_dict(_execute(
+        conn,
+        "SELECT * FROM player_period_stats WHERE user_id = ? AND scope = ? AND period_type = 'all_time' AND period_key = ?",
+        (row["user_id"], row["scope"], ALL_TIME_KEY),
+    ).fetchone())
+    if existing and int(existing.get("games_played") or 0) >= int(row.get("games_played") or 0):
+        return
+
+    _execute(
+        conn,
+        """
+        INSERT INTO player_period_stats (
+            user_id, scope, period_type, period_key, score, games_played, wins, losses,
+            current_streak, max_streak, total_guesses, hint_games, hint_wins,
+            guess_1, guess_2, guess_3, guess_4, guess_5, guess_6, updated_at
+        ) VALUES (?, ?, 'all_time', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (user_id, scope, period_type, period_key) DO UPDATE SET
+            score = excluded.score,
+            games_played = excluded.games_played,
+            wins = excluded.wins,
+            losses = excluded.losses,
+            current_streak = excluded.current_streak,
+            max_streak = excluded.max_streak,
+            total_guesses = excluded.total_guesses,
+            hint_games = excluded.hint_games,
+            hint_wins = excluded.hint_wins,
+            guess_1 = excluded.guess_1,
+            guess_2 = excluded.guess_2,
+            guess_3 = excluded.guess_3,
+            guess_4 = excluded.guess_4,
+            guess_5 = excluded.guess_5,
+            guess_6 = excluded.guess_6,
+            updated_at = excluded.updated_at
+        """,
+        (
+            row["user_id"],
+            row["scope"],
+            ALL_TIME_KEY,
+            int(row.get("score") or 0),
+            int(row.get("games_played") or 0),
+            int(row.get("wins") or 0),
+            int(row.get("losses") or 0),
+            int(row.get("current_streak") or 0),
+            int(row.get("max_streak") or 0),
+            int(row.get("total_guesses") or 0),
+            int(row.get("hint_games") or 0),
+            int(row.get("hint_wins") or 0),
+            int(row.get("guess_1") or 0),
+            int(row.get("guess_2") or 0),
+            int(row.get("guess_3") or 0),
+            int(row.get("guess_4") or 0),
+            int(row.get("guess_5") or 0),
+            int(row.get("guess_6") or 0),
+            row.get("updated_at") or _now_iso(),
+        ),
+    )
+
+
+def _repair_leaderboard_stats(conn) -> None:
+    """Keep legacy all-time stats and period stats in sync across week rollovers."""
+    now = _now_iso()
+    for player in [_row_to_dict(row) for row in _execute(conn, "SELECT user_id FROM players").fetchall()]:
+        if not player:
+            continue
+        for scope in SCOPES:
+            _execute(
+                conn,
+                "INSERT INTO player_stats (user_id, scope, updated_at) VALUES (?, ?, ?) ON CONFLICT (user_id, scope) DO NOTHING",
+                (player["user_id"], scope, now),
+            )
+
+    for row in [_row_to_dict(row) for row in _execute(conn, "SELECT * FROM player_stats WHERE games_played > 0").fetchall()]:
+        if row:
+            _upsert_all_time_period_from_player_stats(conn, row)
+
+    for row in [_row_to_dict(row) for row in _execute(
+        conn,
+        "SELECT * FROM player_period_stats WHERE period_type = 'all_time' AND period_key = ? AND games_played > 0",
+        (ALL_TIME_KEY,),
+    ).fetchall()]:
+        if not row:
+            continue
+        player_stat = _row_to_dict(_execute(
+            conn,
+            "SELECT * FROM player_stats WHERE user_id = ? AND scope = ?",
+            (row["user_id"], row["scope"]),
+        ).fetchone())
+        if not player_stat or int(player_stat.get("games_played") or 0) < int(row.get("games_played") or 0):
+            _copy_period_row_to_player_stats(conn, row)
 
 
 def username_available(username: str) -> bool:
@@ -754,6 +880,7 @@ def leaderboard(scope: str = "overall", limit: int = 50, user_id: str | None = N
     all_params = (scope,) if period == "all_time" else (scope, period_key)
     with _conn() as conn:
         _finalize_previous_weeks(conn)
+        _repair_leaderboard_stats(conn)
         rows = [_row_to_dict(row) for row in _execute(
             conn,
             f"""
@@ -816,6 +943,7 @@ def public_profile(user_id: str) -> dict[str, Any] | None:
     week_key, week_start, week_end = _week_bounds()
     with _conn() as conn:
         _finalize_previous_weeks(conn)
+        _repair_leaderboard_stats(conn)
         player = _row_to_dict(_execute(conn, "SELECT user_id, username, emoji, created_at FROM players WHERE user_id = ?", (user_id,)).fetchone())
         if not player:
             return None
