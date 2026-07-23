@@ -67,6 +67,7 @@ class StatsImportRequest(BaseModel):
     user_id: str
     leaderboard_token: str
     stats_by_scope: dict[str, Any]
+    weekly_stats_by_scope: dict[str, Any] | None = None
 
 class GuessRequest(BaseModel):
     session_id: str
@@ -306,7 +307,7 @@ def read_leaderboard(scope: str = "overall", limit: int = 50, player_id: str | N
 
 @app.post("/players/stats/import")
 def import_public_player_stats(req: StatsImportRequest):
-    imported = import_player_stats(req.user_id, req.leaderboard_token, req.stats_by_scope)
+    imported = import_player_stats(req.user_id, req.leaderboard_token, req.stats_by_scope, req.weekly_stats_by_scope)
     if not imported:
         raise HTTPException(status_code=403, detail="Could not import player stats")
     return {"imported": True}

@@ -533,7 +533,68 @@ def _coerce_import_scope(scope: str, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def import_player_stats(user_id: str | None, token: str | None, stats_by_scope: dict[str, Any]) -> bool:
+def _upsert_weekly_period_from_import(conn, user_id: str, row: dict[str, Any], period_key: str, now: str) -> None:
+    existing = _row_to_dict(_execute(
+        conn,
+        "SELECT * FROM player_period_stats WHERE user_id = ? AND scope = ? AND period_type = 'weekly' AND period_key = ?",
+        (user_id, row["scope"], period_key),
+    ).fetchone())
+    if existing and int(existing.get("games_played") or 0) >= int(row["games_played"]):
+        return
+    period_row = {
+        "user_id": user_id,
+        "scope": row["scope"],
+        "period_type": "weekly",
+        "period_key": period_key,
+        "updated_at": now,
+        **row,
+    }
+    _execute(
+        conn,
+        """
+        INSERT INTO player_period_stats (
+            user_id, scope, period_type, period_key, score, games_played, wins, losses,
+            current_streak, max_streak, total_guesses, hint_games, hint_wins,
+            guess_1, guess_2, guess_3, guess_4, guess_5, guess_6, updated_at
+        ) VALUES (?, ?, 'weekly', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (user_id, scope, period_type, period_key) DO UPDATE SET
+            score = excluded.score,
+            games_played = excluded.games_played,
+            wins = excluded.wins,
+            losses = excluded.losses,
+            current_streak = excluded.current_streak,
+            max_streak = excluded.max_streak,
+            total_guesses = excluded.total_guesses,
+            hint_games = excluded.hint_games,
+            hint_wins = excluded.hint_wins,
+            guess_1 = excluded.guess_1,
+            guess_2 = excluded.guess_2,
+            guess_3 = excluded.guess_3,
+            guess_4 = excluded.guess_4,
+            guess_5 = excluded.guess_5,
+            guess_6 = excluded.guess_6,
+            updated_at = excluded.updated_at
+        """,
+        (
+            user_id,
+            row["scope"],
+            period_key,
+            row["score"],
+            row["games_played"],
+            row["wins"],
+            row["losses"],
+            row["current_streak"],
+            row["max_streak"],
+            row["total_guesses"],
+            row["hint_games"],
+            row["hint_wins"],
+            *row["guess_distribution"],
+            now,
+        ),
+    )
+
+
+def import_player_stats(user_id: str | None, token: str | None, stats_by_scope: dict[str, Any], weekly_stats_by_scope: dict[str, Any] | None = None) -> bool:
     player = verify_player(user_id, token)
     if not player:
         return False
@@ -615,6 +676,15 @@ def import_player_stats(user_id: str | None, token: str | None, stats_by_scope: 
                     now,
                 ),
             )
+        if isinstance(weekly_stats_by_scope, dict):
+            week_key, _, _ = _week_bounds()
+            weekly_prepared: dict[str, dict[str, Any]] = {}
+            for scope in SCOPES:
+                source = weekly_stats_by_scope.get(scope)
+                if isinstance(source, dict):
+                    weekly_prepared[scope] = _coerce_import_scope(scope, source)
+            for row in weekly_prepared.values():
+                _upsert_weekly_period_from_import(conn, user_id, row, week_key, now)
         _repair_leaderboard_stats(conn)
     return True
 

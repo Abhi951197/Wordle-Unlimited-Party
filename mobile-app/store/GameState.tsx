@@ -246,6 +246,7 @@ const defaultStats: Stats = {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 const STATS_STORAGE_KEY = 'word_unlimited_stats';
+const WEEKLY_STATS_STORAGE_KEY = 'word_weekly_stats';
 const DAILY_STORAGE_KEY = 'word_daily_progress';
 const STATS_IMPORT_PREFIX = 'word_stats_imported_';
 const ROOM_STORAGE_KEY = 'word_party_room';
@@ -474,6 +475,25 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return payload;
   };
 
+  const getUtcWeekKey = (date = new Date()) => {
+    const target = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const day = target.getUTCDay() || 7;
+    target.setUTCDate(target.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((target.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    return `${target.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+  };
+
+  const saveCompletedWeeklyStats = async (didWin: boolean, guessCount: number, usedHints: boolean, statDifficulty: string) => {
+    const weekKey = getUtcWeekKey();
+    const storedValue = await AsyncStorage.getItem(WEEKLY_STATS_STORAGE_KEY);
+    const stored = storedValue ? JSON.parse(storedValue) : null;
+    const baseStats = stored?.weekKey === weekKey ? normalizeStats(stored.stats) : normalizeStats(defaultStats);
+    const nextStats = buildUpdatedStats(didWin, guessCount, usedHints, baseStats, statDifficulty);
+    await AsyncStorage.setItem(WEEKLY_STATS_STORAGE_KEY, JSON.stringify({ weekKey, stats: nextStats }));
+    return nextStats;
+  };
+
   const syncLocalStatsToLeaderboard = async (profile: LeaderboardProfile) => {
     try {
       const storedValue = await AsyncStorage.getItem(STATS_STORAGE_KEY);
@@ -482,6 +502,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (!localStats.gamesPlayed) return;
       const importKey = `${STATS_IMPORT_PREFIX}${profile.user_id}_${localStats.gamesPlayed}_${localStats.wins}_${localStats.maxStreak}`;
       if (await AsyncStorage.getItem(importKey)) return;
+      const weekKey = getUtcWeekKey();
+      const weeklyValue = await AsyncStorage.getItem(WEEKLY_STATS_STORAGE_KEY);
+      const weekly = weeklyValue ? JSON.parse(weeklyValue) : null;
+      const weeklyStats = weekly?.weekKey === weekKey ? normalizeStats(weekly.stats) : null;
       const res = await fetch(`${API_URL}/players/stats/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -489,6 +513,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           user_id: profile.user_id,
           leaderboard_token: profile.leaderboard_token,
           stats_by_scope: statsToImportPayload(localStats),
+          weekly_stats_by_scope: weeklyStats ? statsToImportPayload(weeklyStats) : undefined,
         }),
       });
       if (!res.ok) return;
@@ -570,8 +595,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const baseStats = storedValue ? normalizeStats(JSON.parse(storedValue)) : normalizeStats(stats);
     const nextStats = buildUpdatedStats(didWin, guessCount, usedHints, baseStats, statDifficulty);
     await saveAndSetStats(nextStats);
+    await saveCompletedWeeklyStats(didWin, guessCount, usedHints, statDifficulty);
     if (leaderboardProfile?.user_id) {
-      setTimeout(() => void hydrateStatsFromPublicProfile(leaderboardProfile.user_id), 700);
+      setTimeout(() => void syncLocalStatsToLeaderboard(leaderboardProfile), 700);
     }
   };
 
@@ -883,6 +909,16 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const startDailyGame = async () => {
     try {
+      const todayKey = new Date().toISOString().slice(0, 10);
+      const storedDaily = await AsyncStorage.getItem(DAILY_STORAGE_KEY);
+      if (storedDaily) {
+        const saved = JSON.parse(storedDaily);
+        if (saved?.lastPlayedDate === todayKey) {
+          setDailyStreak(saved?.streak ?? 0);
+          showToast(`Today's daily puzzle is already played. Streak: ${saved?.streak ?? 0}`, 'info');
+          return;
+        }
+      }
       const leaderboardQuery = leaderboardProfile
         ? `?leaderboard_user_id=${encodeURIComponent(leaderboardProfile.user_id)}&leaderboard_token=${encodeURIComponent(leaderboardProfile.leaderboard_token)}`
         : '';
