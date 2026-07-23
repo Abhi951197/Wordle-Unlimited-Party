@@ -499,6 +499,126 @@ def score_for_game(difficulty: str, won: bool, guesses: int, hints_used: int) ->
     return max(DIFFICULTY_POINTS.get(difficulty, 100) + (10 * remaining) + (15 if hints_used == 0 else 0) - (10 * hints_used), 0)
 
 
+def _score_from_distribution(scope: str, distribution: list[int], hint_wins: int = 0) -> int:
+    difficulty = scope if scope in DIFFICULTY_POINTS else "easy"
+    score = 0
+    for index, count in enumerate((distribution or [])[:6]):
+        guess_count = index + 1
+        score += score_for_game(difficulty, True, guess_count, 0) * max(int(count or 0), 0)
+    return max(score - (10 * max(int(hint_wins or 0), 0)), 0)
+
+
+def _coerce_import_scope(scope: str, payload: dict[str, Any]) -> dict[str, Any]:
+    distribution = payload.get("guess_distribution") if isinstance(payload.get("guess_distribution"), list) else []
+    distribution = [max(int(value or 0), 0) for value in distribution[:6]]
+    distribution = (distribution + [0, 0, 0, 0, 0, 0])[:6]
+    wins = max(int(payload.get("wins") or sum(distribution)), sum(distribution))
+    games_played = max(int(payload.get("games_played") or wins), wins)
+    losses = max(int(payload.get("losses") or (games_played - wins)), 0)
+    hint_games = max(int(payload.get("hint_games") or 0), 0)
+    hint_wins = max(int(payload.get("hint_wins") or 0), 0)
+    total_guesses = sum((index + 1) * count for index, count in enumerate(distribution))
+    return {
+        "scope": scope,
+        "score": max(int(payload.get("score") or _score_from_distribution(scope, distribution, hint_wins)), 0),
+        "games_played": games_played,
+        "wins": wins,
+        "losses": losses,
+        "current_streak": max(int(payload.get("current_streak") or 0), 0),
+        "max_streak": max(int(payload.get("max_streak") or 0), 0),
+        "total_guesses": max(int(payload.get("total_guesses") or total_guesses), total_guesses),
+        "hint_games": hint_games,
+        "hint_wins": hint_wins,
+        "guess_distribution": distribution,
+    }
+
+
+def import_player_stats(user_id: str | None, token: str | None, stats_by_scope: dict[str, Any]) -> bool:
+    player = verify_player(user_id, token)
+    if not player:
+        return False
+
+    now = _now_iso()
+    prepared: dict[str, dict[str, Any]] = {}
+    for scope in SCOPES:
+        source = stats_by_scope.get(scope) if isinstance(stats_by_scope, dict) else None
+        if isinstance(source, dict):
+            prepared[scope] = _coerce_import_scope(scope, source)
+
+    if "overall" not in prepared:
+        return False
+
+    if any(scope in prepared for scope in DIFFICULTY_POINTS):
+        difficulty_rows = [prepared[scope] for scope in DIFFICULTY_POINTS if scope in prepared]
+        summed = {
+            "scope": "overall",
+            "score": sum(row["score"] for row in difficulty_rows),
+            "games_played": sum(row["games_played"] for row in difficulty_rows),
+            "wins": sum(row["wins"] for row in difficulty_rows),
+            "losses": sum(row["losses"] for row in difficulty_rows),
+            "current_streak": prepared["overall"]["current_streak"],
+            "max_streak": max(prepared["overall"]["max_streak"], max((row["max_streak"] for row in difficulty_rows), default=0)),
+            "total_guesses": sum(row["total_guesses"] for row in difficulty_rows),
+            "hint_games": sum(row["hint_games"] for row in difficulty_rows),
+            "hint_wins": sum(row["hint_wins"] for row in difficulty_rows),
+            "guess_distribution": [
+                sum(row["guess_distribution"][index] for row in difficulty_rows)
+                for index in range(6)
+            ],
+        }
+        if summed["games_played"] >= prepared["overall"]["games_played"]:
+            prepared["overall"] = summed
+
+    with _conn() as conn:
+        for scope, row in prepared.items():
+            existing = _row_to_dict(_execute(conn, "SELECT * FROM player_stats WHERE user_id = ? AND scope = ?", (user_id, scope)).fetchone())
+            if existing and int(existing.get("games_played") or 0) >= int(row["games_played"]):
+                continue
+            _execute(
+                conn,
+                """
+                INSERT INTO player_stats (
+                    user_id, scope, score, games_played, wins, losses, current_streak, max_streak,
+                    total_guesses, hint_games, hint_wins, guess_1, guess_2, guess_3, guess_4, guess_5, guess_6, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (user_id, scope) DO UPDATE SET
+                    score = excluded.score,
+                    games_played = excluded.games_played,
+                    wins = excluded.wins,
+                    losses = excluded.losses,
+                    current_streak = excluded.current_streak,
+                    max_streak = excluded.max_streak,
+                    total_guesses = excluded.total_guesses,
+                    hint_games = excluded.hint_games,
+                    hint_wins = excluded.hint_wins,
+                    guess_1 = excluded.guess_1,
+                    guess_2 = excluded.guess_2,
+                    guess_3 = excluded.guess_3,
+                    guess_4 = excluded.guess_4,
+                    guess_5 = excluded.guess_5,
+                    guess_6 = excluded.guess_6,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    user_id,
+                    scope,
+                    row["score"],
+                    row["games_played"],
+                    row["wins"],
+                    row["losses"],
+                    row["current_streak"],
+                    row["max_streak"],
+                    row["total_guesses"],
+                    row["hint_games"],
+                    row["hint_wins"],
+                    *row["guess_distribution"],
+                    now,
+                ),
+            )
+        _repair_leaderboard_stats(conn)
+    return True
+
+
 def _stat_update_values(current: dict[str, Any] | None, won: bool, guesses: int, hints_used: int) -> tuple[int, int]:
     current = current or {}
     next_streak = int(current.get("current_streak") or 0) + 1 if won else 0

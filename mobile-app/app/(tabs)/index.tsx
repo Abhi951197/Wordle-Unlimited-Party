@@ -88,12 +88,12 @@ const ToastBanner: React.FC<{ message: string; type: 'error' | 'warning' | 'info
 
 export default function GameScreen() {
   const {
-    startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, changeRoomDifficulty,
+    startGame, startDailyGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, changeRoomDifficulty,
     registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile, leaderboardProfile,
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
     sessionId, difficulty, roomId, playerId, playerEmoji, roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard,
-    shareRequest, chatMessages, sendChatMessage, stats, invalidShake, lastSubmittedRow, answer, answerInfo, maxGuesses, toast,
+    shareRequest, chatMessages, sendChatMessage, stats, invalidShake, lastSubmittedRow, answer, answerInfo, maxGuesses, toast, dailyDate, dailyStreak,
     getHint, hints, hintsUsed,
   } = useGameState();
 
@@ -430,6 +430,14 @@ export default function GameScreen() {
     else setView('party');
   };
 
+  const chooseDailyMode = async () => {
+    trackEvent('Mode Selected', { mode: 'daily' });
+    if (roomId) leaveRoom();
+    await startDailyGame();
+    setSelectedMode('solo');
+    setView('solo');
+  };
+
   const startSelectedDifficulty = async (nextDifficulty = difficulty) => {
     if (!leaderboardProfile) {
       setUsernameInput(roomName.trim().replace(/\s+/g, '_').toLowerCase());
@@ -683,7 +691,6 @@ export default function GameScreen() {
                   <TouchableOpacity style={styles.homeNavButton} onPress={() => openLeaderboard('overall')}><Text style={styles.homeNavButtonText}>Leaderboard</Text></TouchableOpacity>
                   <Link href={'/how-to-play' as never} style={styles.homeNavLink}>How to Play</Link>
                   <Link href={'/features' as never} style={styles.homeNavLink}>Features</Link>
-                  <Link href={'/contact' as never} style={styles.homeNavLink}>Contact</Link>
                 </View>
               </View>
 
@@ -703,6 +710,15 @@ export default function GameScreen() {
                       <Text style={styles.homeModeTitle}>Solo Mode</Text>
                       <Text style={styles.homeModeDesc}>Play alone, choose difficulty, and build your streak.</Text>
                       <Text style={styles.homeModeCta}>Play Solo</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.homeModeCard, styles.homeDailyCard]} onPress={chooseDailyMode} activeOpacity={0.86}>
+                      <View style={styles.homeModeTop}>
+                        <View style={[styles.homeModeIcon, styles.homeDailyIcon]}><Text style={styles.homeModeIconText}>D</Text></View>
+                        <Text style={styles.homeModeArrow}>→</Text>
+                      </View>
+                      <Text style={styles.homeModeTitle}>Daily Word</Text>
+                      <Text style={styles.homeModeDesc}>One global puzzle every day. Streak: {dailyStreak}</Text>
+                      <Text style={[styles.homeModeCta, styles.homeDailyCta]}>Play Today</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.homeModeCard, styles.homePartyCard]} onPress={() => chooseMode('party')} activeOpacity={0.86}>
                       <View style={styles.homeModeTop}>
@@ -751,7 +767,6 @@ export default function GameScreen() {
               <View style={styles.homeFooterLinks}>
                 <Link href={'/privacy' as never} style={styles.seoLink}>Privacy</Link>
                 <Link href={'/terms' as never} style={styles.seoLink}>Terms</Link>
-                <Link href={'/contact' as never} style={styles.seoLink}>Contact</Link>
               </View>
             </View>
           </ScrollView>
@@ -1197,6 +1212,7 @@ export default function GameScreen() {
           <View style={styles.resultCard}>
             <View style={styles.logoMarkSmall}><Text style={styles.logoMarkText}>W</Text></View>
             <Text style={[styles.resultTitle, gameStatus === 'won' ? styles.win : styles.loss]}>{gameStatus === 'won' ? 'You Win!' : 'Game Over'}</Text>
+            {dailyDate && <Text style={styles.hintAssistedText}>Daily streak: {dailyStreak}</Text>}
             {answer && <Text style={styles.answerText}>{gameStatus === 'won' ? `The word was ${answer}` : `The word was ${answer}`}</Text>}
             {hintsUsed > 0 && <Text style={styles.hintAssistedText}>Hint-assisted</Text>}
             {answerInfo && <AnswerMeaningCard info={answerInfo} />}
@@ -1520,26 +1536,29 @@ const styles = StyleSheet.create({
   homeActionGridMobile: { flexDirection: 'column' },
   homeModeCard: { flexGrow: 1, flexBasis: 230, minHeight: 198, borderRadius: 20, borderWidth: 1, padding: 18, gap: 10, justifyContent: 'space-between' },
   homeSoloCard: { borderColor: '#16C75A', backgroundColor: '#082B1A' },
+  homeDailyCard: { borderColor: '#FACC15', backgroundColor: '#2A2108' },
   homePartyCard: { borderColor: '#8B5CF6', backgroundColor: '#1D123A' },
   homeModeTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   homeModeIcon: { width: 52, height: 52, borderRadius: 17, backgroundColor: '#16C75A', alignItems: 'center', justifyContent: 'center' },
+  homeDailyIcon: { backgroundColor: '#FACC15' },
   homePartyIcon: { backgroundColor: '#7C3AED' },
   homeModeIconText: { color: '#FFFFFF', fontSize: 23, fontWeight: '900' },
   homeModeArrow: { color: '#FFFFFF', fontSize: 24, fontWeight: '900' },
   homeModeTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: '900' },
   homeModeDesc: { color: '#D8E1F1', fontSize: 13, lineHeight: 19, fontWeight: '700' },
   homeModeCta: { alignSelf: 'flex-start', marginTop: 4, color: '#FFFFFF', backgroundColor: '#16A34A', borderRadius: 13, overflow: 'hidden', paddingHorizontal: 14, paddingVertical: 10, fontSize: 13, fontWeight: '900' },
+  homeDailyCta: { backgroundColor: '#FACC15', color: '#111827' },
   homePartyCta: { backgroundColor: '#7C3AED' },
   homeArtCard: { flex: 0.8, minHeight: 360, borderRadius: 24, borderWidth: 1, borderColor: '#2B2254', backgroundColor: '#0A1020', overflow: 'hidden', justifyContent: 'flex-end' },
   homeArtImage: { position: 'absolute', width: '120%', height: '120%', opacity: 0.86 },
   homeArtBadge: { alignSelf: 'flex-start', margin: 16, borderRadius: 999, backgroundColor: 'rgba(5,7,17,0.72)', paddingHorizontal: 14, paddingVertical: 9 },
   homeArtBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
-  homeFeatureStrip: { borderRadius: 22, borderWidth: 1, borderColor: '#24314C', backgroundColor: '#0B1426', padding: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  homeFeatureStrip: { display: 'none' },
   homeFeature: { flexGrow: 1, flexBasis: 160, minHeight: 72, borderRadius: 16, backgroundColor: '#111B2D', paddingHorizontal: 12, paddingVertical: 10, justifyContent: 'center' },
   homeFeatureIcon: { fontSize: 22, marginBottom: 4 },
   homeFeatureTitle: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
   homeFeatureText: { color: '#AEB8CF', fontSize: 11, fontWeight: '800', marginTop: 2 },
-  homeSeoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  homeSeoGrid: { display: 'none' },
   homeSeoPanel: { flexGrow: 1, flexBasis: 280, borderRadius: 18, borderWidth: 1, borderColor: '#202B46', backgroundColor: '#0D1728', padding: 16, gap: 8 },
   homeReadMore: { color: '#60A5FA', fontSize: 13, fontWeight: '900', textDecorationLine: 'none', marginTop: 4 },
   homeFooterLinks: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 14, paddingVertical: 4 },

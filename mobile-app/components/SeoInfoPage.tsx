@@ -24,7 +24,6 @@ const navItems = [
   { href: '/how-to-play', label: 'How to Play' },
   { href: '/features', label: 'Features' },
   { href: '/leaderboard', label: 'Leaderboard' },
-  { href: '/contact', label: 'Contact' },
   { href: '/terms', label: 'Terms' },
   { href: '/privacy', label: 'Privacy' },
 ];

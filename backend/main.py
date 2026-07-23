@@ -8,11 +8,13 @@ import uuid
 import os
 import string
 import random
+import hashlib
 
-from words import get_word, VALID_GUESSES
+from words import get_word, VALID_GUESSES, ANSWER_WORDS
 from word_metadata import get_word_metadata, validate_metadata_coverage
 from leaderboard import (
     init_db,
+    import_player_stats,
     leaderboard as get_leaderboard,
     public_profile as get_public_profile,
     record_result,
@@ -59,6 +61,12 @@ init_db()
 class GameCreateResponse(BaseModel):
     session_id: str
     length: int
+    daily_date: str | None = None
+
+class StatsImportRequest(BaseModel):
+    user_id: str
+    leaderboard_token: str
+    stats_by_scope: dict[str, Any]
 
 class GuessRequest(BaseModel):
     session_id: str
@@ -140,6 +148,7 @@ class RoomPlayer(BaseModel):
 class BoardState(BaseModel):
     session_id: str
     difficulty: str
+    daily_date: str | None = None
     length: int
     guesses: list[str]
     results: list[list[str]]
@@ -295,6 +304,13 @@ def read_leaderboard(scope: str = "overall", limit: int = 50, player_id: str | N
     data = get_leaderboard(scope, limit, player_id, period, week)
     return LeaderboardResponse(**data, scoring=_scoring_rules())
 
+@app.post("/players/stats/import")
+def import_public_player_stats(req: StatsImportRequest):
+    imported = import_player_stats(req.user_id, req.leaderboard_token, req.stats_by_scope)
+    if not imported:
+        raise HTTPException(status_code=403, detail="Could not import player stats")
+    return {"imported": True}
+
 @app.get("/players/{user_id}/public-profile", response_model=PublicProfileResponse)
 def read_public_profile(user_id: str):
     profile = get_public_profile(user_id)
@@ -350,12 +366,18 @@ def _clean_player_emoji(player_emoji: str | None) -> str:
     emoji = (player_emoji or "🙂").strip()
     return emoji[:4] or "🙂"
 
-def _create_session(difficulty: str) -> str:
-    word = get_word(difficulty)
+def _daily_word_for(date_key: str) -> str:
+    digest = hashlib.sha256(f"wordle-daily:{date_key}".encode("utf-8")).hexdigest()
+    index = int(digest[:12], 16) % len(ANSWER_WORDS)
+    return ANSWER_WORDS[index]
+
+def _create_session(difficulty: str, word: str | None = None, daily_date: str | None = None) -> str:
+    word = word or get_word(difficulty)
     session_id = str(uuid.uuid4())
     sessions[session_id] = {
         "word": word,
         "difficulty": difficulty,
+        "daily_date": daily_date,
         "guesses": [],
         "results": [],
         "current_guess": "",
@@ -450,6 +472,7 @@ def _board_state(session_id: str | None) -> BoardState | None:
     return BoardState(
         session_id=session_id,
         difficulty=session["difficulty"],
+        daily_date=session.get("daily_date"),
         length=len(session["word"]),
         guesses=session["guesses"],
         results=session["results"],
@@ -652,6 +675,14 @@ def create_game(difficulty: str = "easy", leaderboard_user_id: str | None = None
     session_id = _create_session(difficulty)
     _mark_session_participant(session_id, leaderboard_user_id, leaderboard_token)
     return GameCreateResponse(session_id=session_id, length=len(sessions[session_id]["word"]))
+
+@app.get("/daily-word", response_model=GameCreateResponse)
+def create_daily_game(leaderboard_user_id: str | None = None, leaderboard_token: str | None = None):
+    date_key = datetime.now(timezone.utc).date().isoformat()
+    session_id = _create_session("easy", word=_daily_word_for(date_key), daily_date=date_key)
+    _mark_session_participant(session_id, leaderboard_user_id, leaderboard_token)
+    _mark_session_leaderboard_context(session_id, "daily", False)
+    return GameCreateResponse(session_id=session_id, length=len(sessions[session_id]["word"]), daily_date=date_key)
 
 @app.get("/sessions/{session_id}", response_model=BoardState)
 def get_session_state(session_id: str):

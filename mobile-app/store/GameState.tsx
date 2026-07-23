@@ -47,6 +47,7 @@ export interface RoomPlayer {
 export interface BoardState {
   session_id: string;
   difficulty: string;
+  daily_date?: string | null;
   length: number;
   guesses: string[];
   results: string[][];
@@ -200,7 +201,10 @@ interface GameStateContextType {
   gameStatus: 'playing' | 'won' | 'lost';
   letterStates: Record<string, 'correct' | 'present' | 'absent' | 'empty' | 'banned'>;
   stats: Stats;
+  dailyDate: string | null;
+  dailyStreak: number;
   startGame: (difficulty: string) => Promise<void>;
+  startDailyGame: () => Promise<void>;
   createRoom: (difficulty: string, playerName: string, playerEmoji?: string) => Promise<boolean>;
   joinRoom: (roomId: string, playerName: string, playerEmoji?: string) => Promise<boolean>;
   registerLeaderboardProfile: (username: string, emoji?: string) => Promise<boolean>;
@@ -242,6 +246,8 @@ const defaultStats: Stats = {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 const STATS_STORAGE_KEY = 'word_unlimited_stats';
+const DAILY_STORAGE_KEY = 'word_daily_progress';
+const STATS_IMPORT_PREFIX = 'word_stats_imported_';
 const ROOM_STORAGE_KEY = 'word_party_room';
 const LEADERBOARD_PROFILE_KEY = 'word_leaderboard_profile';
 
@@ -272,6 +278,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [gameStatus, setGameStatus] = useState<'playing' | 'won' | 'lost'>('playing');
   const [letterStates, setLetterStates] = useState<Record<string, any>>({});
   const [stats, setStats] = useState<Stats>(defaultStats);
+  const [dailyDate, setDailyDate] = useState<string | null>(null);
+  const [dailyStreak, setDailyStreak] = useState(0);
   const [hints, setHints] = useState<HintState[]>([]);
   const [hintsUsed, setHintsUsed] = useState(0);
   const [invalidShake, setInvalidShake] = useState(0);
@@ -335,6 +343,15 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     AsyncStorage.getItem(STATS_STORAGE_KEY).then(val => {
       if (val) setStats(normalizeStats(JSON.parse(val)));
     });
+    AsyncStorage.getItem(DAILY_STORAGE_KEY).then(val => {
+      if (!val) return;
+      try {
+        const saved = JSON.parse(val);
+        setDailyStreak(saved?.streak ?? 0);
+      } catch {
+        AsyncStorage.removeItem(DAILY_STORAGE_KEY);
+      }
+    });
     AsyncStorage.getItem(LEADERBOARD_PROFILE_KEY).then(val => {
       if (!val) return;
       try {
@@ -343,7 +360,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setLeaderboardProfile(saved);
           setPlayerName(saved.username);
           setPlayerEmoji(saved.emoji || '🙂');
-          void hydrateStatsFromPublicProfile(saved.user_id);
+          void syncLocalStatsToLeaderboard(saved);
         }
       } catch {
         AsyncStorage.removeItem(LEADERBOARD_PROFILE_KEY);
@@ -436,6 +453,52 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     });
   };
 
+  const statsToImportPayload = (sourceStats: Stats) => {
+    const normalized = normalizeStats(sourceStats);
+    const scopePayload = (scopeStats: Stats | DifficultyStats, scoreScope?: string) => ({
+      games_played: scopeStats.gamesPlayed ?? 0,
+      wins: scopeStats.wins ?? 0,
+      losses: 'losses' in scopeStats ? scopeStats.losses : Math.max((scopeStats.gamesPlayed ?? 0) - (scopeStats.wins ?? 0), 0),
+      current_streak: scopeStats.currentStreak ?? 0,
+      max_streak: scopeStats.maxStreak ?? 0,
+      hint_games: scopeStats.hintGames ?? 0,
+      hint_wins: scopeStats.hintWins ?? 0,
+      guess_distribution: Array.isArray(scopeStats.guessDistribution) ? scopeStats.guessDistribution : [0, 0, 0, 0, 0, 0],
+      scope: scoreScope,
+    });
+    const payload: Record<string, unknown> = { overall: scopePayload(normalized, 'overall') };
+    for (const scope of ['easy', 'moderate', 'difficult', 'prodigy']) {
+      const diffStats = normalized.byDifficulty?.[scope];
+      if (diffStats?.gamesPlayed) payload[scope] = scopePayload(diffStats, scope);
+    }
+    return payload;
+  };
+
+  const syncLocalStatsToLeaderboard = async (profile: LeaderboardProfile) => {
+    try {
+      const storedValue = await AsyncStorage.getItem(STATS_STORAGE_KEY);
+      if (!storedValue) return;
+      const localStats = normalizeStats(JSON.parse(storedValue));
+      if (!localStats.gamesPlayed) return;
+      const importKey = `${STATS_IMPORT_PREFIX}${profile.user_id}_${localStats.gamesPlayed}_${localStats.wins}_${localStats.maxStreak}`;
+      if (await AsyncStorage.getItem(importKey)) return;
+      const res = await fetch(`${API_URL}/players/stats/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: profile.user_id,
+          leaderboard_token: profile.leaderboard_token,
+          stats_by_scope: statsToImportPayload(localStats),
+        }),
+      });
+      if (!res.ok) return;
+      await AsyncStorage.setItem(importKey, '1');
+      await hydrateStatsFromPublicProfile(profile.user_id);
+    } catch {
+      // Local leaderboard sync is best-effort.
+    }
+  };
+
   const hydrateStatsFromPublicProfile = async (userId: string) => {
     try {
       const res = await fetch(`${API_URL}/players/${encodeURIComponent(userId)}/public-profile`);
@@ -512,6 +575,35 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
+  const recordDailyCompletion = async (didWin: boolean, completedDate: string | null) => {
+    if (!completedDate) return;
+    try {
+      const storedValue = await AsyncStorage.getItem(DAILY_STORAGE_KEY);
+      const saved = storedValue ? JSON.parse(storedValue) : {};
+      if (saved?.lastPlayedDate === completedDate) {
+        setDailyStreak(saved?.streak ?? 0);
+        return;
+      }
+      const yesterday = new Date(`${completedDate}T00:00:00Z`);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yesterdayKey = yesterday.toISOString().slice(0, 10);
+      const nextStreak = didWin
+        ? saved?.lastWinDate === yesterdayKey
+          ? (saved?.streak ?? 0) + 1
+          : 1
+        : 0;
+      const next = {
+        streak: nextStreak,
+        lastPlayedDate: completedDate,
+        lastWinDate: didWin ? completedDate : saved?.lastWinDate ?? null,
+      };
+      setDailyStreak(nextStreak);
+      await AsyncStorage.setItem(DAILY_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Daily streaks are local-only and should never block result display.
+    }
+  };
+
   const showToast = (message: string, type: Toast['type'] = 'error') => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToastState({ message, type });
@@ -545,7 +637,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setPlayerName(profile.username);
       setPlayerEmoji(profile.emoji);
       await AsyncStorage.setItem(LEADERBOARD_PROFILE_KEY, JSON.stringify(profile));
-      void hydrateStatsFromPublicProfile(profile.user_id);
+      void syncLocalStatsToLeaderboard(profile);
       showToast('Leaderboard profile ready', 'info');
       return true;
     } catch {
@@ -763,7 +855,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         : '';
       const res = await fetch(`${API_URL}/word?difficulty=${diff}${leaderboardQuery}`);
       const data = await res.json();
+      resetBoardState();
+      setDailyDate(null);
       setSessionId(data.session_id);
+      sessionIdRef.current = data.session_id;
       setRoomId(null);
       setPlayerId(null);
       setPlayerEmoji('🙂');
@@ -780,10 +875,43 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       AsyncStorage.removeItem(ROOM_STORAGE_KEY);
       setWordLength(data.length);
       setDifficulty(diff);
-      resetBoardState();
       trackEvent('Game Started', { mode: 'solo', difficulty: diff });
     } catch {
       showToast('Cannot reach backend - is it running?', 'error');
+    }
+  };
+
+  const startDailyGame = async () => {
+    try {
+      const leaderboardQuery = leaderboardProfile
+        ? `?leaderboard_user_id=${encodeURIComponent(leaderboardProfile.user_id)}&leaderboard_token=${encodeURIComponent(leaderboardProfile.leaderboard_token)}`
+        : '';
+      const res = await fetch(`${API_URL}/daily-word${leaderboardQuery}`);
+      if (!res.ok) throw new Error('daily');
+      const data = await res.json();
+      resetBoardState();
+      setSessionId(data.session_id);
+      sessionIdRef.current = data.session_id;
+      setDailyDate(data.daily_date ?? null);
+      setRoomId(null);
+      setPlayerId(null);
+      setPlayerEmoji('🙂');
+      setRoomPlayers([]);
+      setMaxRoomPlayers(8);
+      setTypingPlayerName(null);
+      setTypingPlayerEmoji(null);
+      setLivekit(null);
+      setActiveBoardState('shared');
+      setSharedBoard(null);
+      setIndividualBoard(null);
+      setShareRequest(null);
+      setChatMessages([]);
+      AsyncStorage.removeItem(ROOM_STORAGE_KEY);
+      setWordLength(data.length);
+      setDifficulty('easy');
+      trackEvent('Game Started', { mode: 'daily', difficulty: 'easy' });
+    } catch {
+      showToast("Cannot load today's puzzle", 'error');
     }
   };
 
@@ -1197,6 +1325,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setHintsUsed(data.hints_used ?? hintsUsed);
           setGameStatus('won');
           saveCompletedStats(true, newGuesses.length, (data.hints_used ?? hintsUsed) > 0, difficulty);
+          recordDailyCompletion(true, dailyDate);
           trackEvent('Game Won', { mode: 'solo', difficulty, guesses: newGuesses.length });
         } else if (data.game_over) {
           locallyRecordedSessionsRef.current.add(sessionId);
@@ -1205,6 +1334,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setHintsUsed(data.hints_used ?? hintsUsed);
           setGameStatus('lost');
           saveCompletedStats(false, newGuesses.length, (data.hints_used ?? hintsUsed) > 0, difficulty);
+          recordDailyCompletion(false, dailyDate);
           trackEvent('Game Lost', { mode: 'solo', difficulty, guesses: newGuesses.length });
         }
       }, 1600);
@@ -1229,8 +1359,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     <GameStateContext.Provider value={{
       difficulty, wordLength, sessionId, roomId, playerId, playerName, playerEmoji, leaderboardProfile,
       roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard, sharedBoard, individualBoard, shareRequest, chatMessages,
-      guesses, results, currentGuess, gameStatus, letterStates, stats,
-      startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
+      guesses, results, currentGuess, gameStatus, letterStates, stats, dailyDate, dailyStreak,
+      startGame, startDailyGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
       registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile,
       changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, sendChatMessage, addLetter, removeLetter,
       submitGuess, getHint, hints, hintsUsed, invalidShake, lastSubmittedRow,
