@@ -106,6 +106,9 @@ class RoomCreateRequest(PlayerRequest):
 class RoomJoinRequest(PlayerRequest):
     pass
 
+class RoomFromSessionRequest(PlayerRequest):
+    session_id: str
+
 class RoomGuessRequest(BaseModel):
     player_id: str
     guess: str
@@ -864,6 +867,52 @@ def create_room(req: RoomCreateRequest):
         },
         "last_active_at": _now_iso(),
     }
+    state = _room_state(room_id, player_id)
+    return RoomJoinResponse(**state.model_dump(), player_id=player_id)
+
+@app.post("/rooms/from-session", response_model=RoomJoinResponse)
+def create_room_from_session(req: RoomFromSessionRequest):
+    _cleanup_idle_rooms()
+    if not req.player_name.strip():
+        raise HTTPException(status_code=400, detail="Player name is required")
+    if req.session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sessions[req.session_id]
+    if session.get("game_over"):
+        raise HTTPException(status_code=409, detail="Completed boards cannot become party rooms")
+    room_id = _room_code()
+    player_id = req.player_id or str(uuid.uuid4())
+    player_name = _clean_player_name(req.player_name)
+    player_emoji = _clean_player_emoji(req.player_emoji)
+    difficulty = session.get("difficulty") if isinstance(session.get("difficulty"), str) else "easy"
+    individual_session_id = _create_session(difficulty)
+    _mark_session_leaderboard_context(req.session_id, "party", True)
+    _mark_session_leaderboard_context(individual_session_id, "party", False)
+    rooms[room_id] = {
+        "room_id": room_id,
+        "host_player_id": player_id,
+        "voice_room_id": room_id,
+        "difficulty": difficulty,
+        "active_shared_session_id": req.session_id,
+        "player_sessions": {player_id: individual_session_id},
+        "player_active_boards": {player_id: "shared"},
+        "share_request": None,
+        "chat_messages": [],
+        "created_at": _now_iso(),
+        "players": {
+            player_id: {
+                "player_id": player_id,
+                "player_name": player_name,
+                "player_emoji": player_emoji,
+                "leaderboard_user_id": req.leaderboard_user_id,
+                "leaderboard_token": req.leaderboard_token,
+                "joined_at": _now_iso(),
+                "last_active_at": _now_iso(),
+            }
+        },
+        "last_active_at": _now_iso(),
+    }
+    _mark_session_participant(req.session_id, req.leaderboard_user_id, req.leaderboard_token)
     state = _room_state(room_id, player_id)
     return RoomJoinResponse(**state.model_dump(), player_id=player_id)
 

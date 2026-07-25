@@ -951,8 +951,34 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const inviteFriendToRoom = async (toUserId: string) => {
-    if (!leaderboardProfile || !roomId) {
-      showToast('Create or join a party first', 'warning');
+    if (!leaderboardProfile) return false;
+    let inviteRoomId = roomId;
+    if (!inviteRoomId && sessionIdRef.current && gameStatus === 'playing') {
+      try {
+        const res = await fetch(`${API_URL}/rooms/from-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionIdRef.current,
+            player_name: leaderboardProfile.username,
+            player_emoji: leaderboardProfile.emoji || '🙂',
+            leaderboard_user_id: leaderboardProfile.user_id,
+            leaderboard_token: leaderboardProfile.leaderboard_token,
+          }),
+        });
+        if (!res.ok) throw new Error('room');
+        const data = await res.json();
+        setPlayerId(data.player_id);
+        await persistRoom(data, leaderboardProfile.username, leaderboardProfile.emoji || '🙂');
+        applyRoomState(data, data.player_id);
+        inviteRoomId = data.room_id;
+      } catch {
+        showToast('Could not share this board as a party', 'warning');
+        return false;
+      }
+    }
+    if (!inviteRoomId) {
+      showToast('Start a party or active board first', 'warning');
       return false;
     }
     try {
@@ -963,7 +989,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           user_id: leaderboardProfile.user_id,
           leaderboard_token: leaderboardProfile.leaderboard_token,
           to_user_id: toUserId,
-          room_id: roomId,
+          room_id: inviteRoomId,
         }),
       });
       if (!res.ok) throw new Error('invite');

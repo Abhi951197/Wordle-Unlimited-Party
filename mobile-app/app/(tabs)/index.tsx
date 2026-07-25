@@ -836,15 +836,25 @@ export default function GameScreen() {
         {view === 'party' && !roomId && (
           <ScrollView contentContainerStyle={styles.scrollScreen} showsVerticalScrollIndicator={false}>
             {renderTopBar('Start a Party', 'Create or join a room')}
-            <Text style={[styles.inputLabel, themed.subtleText]}>Your name</Text>
-            <TextInput
-              value={roomName}
-              onChangeText={(value) => { setRoomName(value); if (nameError) setNameError(''); }}
-              placeholder=""
-              placeholderTextColor="#64748B"
-              style={[styles.input, themed.input, nameError && styles.inputError]}
-              autoCorrect={false}
-            />
+            <Text style={[styles.inputLabel, themed.subtleText]}>Playing as</Text>
+            {leaderboardProfile ? (
+              <View style={[styles.profileDisplay, themed.panel]}>
+                <Text style={styles.profileDisplayEmoji}>{leaderboardProfile.emoji || selectedEmoji}</Text>
+                <View style={styles.socialInfo}>
+                  <Text style={[styles.socialName, themed.titleText]}>{leaderboardProfile.username}</Text>
+                  <Text style={[styles.socialMeta, themed.mutedText]}>Leaderboard username</Text>
+                </View>
+              </View>
+            ) : (
+              <TextInput
+                value={roomName}
+                onChangeText={(value) => { setRoomName(value); if (nameError) setNameError(''); }}
+                placeholder=""
+                placeholderTextColor="#64748B"
+                style={[styles.input, themed.input, nameError && styles.inputError]}
+                autoCorrect={false}
+              />
+            )}
             {!!nameError && <Text style={styles.fieldError}>{nameError}</Text>}
             <Text style={[styles.inputLabel, themed.subtleText]}>Profile emoji</Text>
             <TouchableOpacity style={[styles.emojiPickerButton, themed.panel]} onPress={() => setEmojiModal(true)}>
@@ -1049,7 +1059,7 @@ export default function GameScreen() {
                   <Text style={styles.socialMeta}>{friend.online ? friend.status || 'online' : 'offline'}</Text>
                 </View>
                 <View style={[styles.onlineDot, friend.online ? styles.onlineDotActive : styles.onlineDotMuted]} />
-                {roomId && friend.online && <TouchableOpacity style={styles.inviteBtn} onPress={() => inviteFriendToRoom(friend.user_id)}><Text style={styles.inviteText}>Invite</Text></TouchableOpacity>}
+                {friend.online && (roomId || sessionId) && <TouchableOpacity style={styles.inviteBtn} onPress={() => inviteFriendToRoom(friend.user_id)}><Text style={styles.inviteText}>Invite</Text></TouchableOpacity>}
               </View>
             )) : (
               <Text style={styles.emptySocialText}>No friends yet. Search a username to add someone.</Text>
@@ -1721,6 +1731,8 @@ const styles = StyleSheet.create({
   inputLabel: { color: '#D1D5DB', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 },
   input: { minHeight: 52, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', color: '#F8FAFC', paddingHorizontal: 14, fontSize: 15, fontWeight: '800' },
   inputError: { borderColor: '#EF4444' },
+  profileDisplay: { minHeight: 58, borderRadius: 15, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  profileDisplayEmoji: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1F2937', textAlign: 'center', textAlignVertical: 'center', fontSize: 20, overflow: 'hidden' },
   fieldError: { color: '#EF4444', fontSize: 12, fontWeight: '800', marginTop: 6 },
   emojiPicker: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   emojiOption: { width: 38, height: 38, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
