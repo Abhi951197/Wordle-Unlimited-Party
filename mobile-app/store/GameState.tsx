@@ -500,6 +500,26 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return nextStats;
   };
 
+  const restoreLeaderboardProfileOnBackend = async (profile: LeaderboardProfile) => {
+    const res = await fetch(`${API_URL}/players/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: profile.username,
+        emoji: profile.emoji || '🙂',
+        user_id: profile.user_id,
+        leaderboard_token: profile.leaderboard_token,
+      }),
+    });
+    if (!res.ok) return false;
+    const restored = await res.json();
+    await AsyncStorage.setItem(LEADERBOARD_PROFILE_KEY, JSON.stringify(restored));
+    setLeaderboardProfile(restored);
+    setPlayerName(restored.username);
+    setPlayerEmoji(restored.emoji || '🙂');
+    return true;
+  };
+
   const syncLocalStatsToLeaderboard = async (profile: LeaderboardProfile) => {
     try {
       const storedValue = await AsyncStorage.getItem(STATS_STORAGE_KEY);
@@ -534,16 +554,24 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         weeklyStats?.maxStreak ?? 0,
       ].join('_');
       if (await AsyncStorage.getItem(importKey)) return;
-      const res = await fetch(`${API_URL}/players/stats/import`, {
+      const payload = {
+        user_id: profile.user_id,
+        leaderboard_token: profile.leaderboard_token,
+        stats_by_scope: statsToImportPayload(localStats),
+        weekly_stats_by_scope: weeklyStats ? statsToImportPayload(weeklyStats) : undefined,
+      };
+      let res = await fetch(`${API_URL}/players/stats/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: profile.user_id,
-          leaderboard_token: profile.leaderboard_token,
-          stats_by_scope: statsToImportPayload(localStats),
-          weekly_stats_by_scope: weeklyStats ? statsToImportPayload(weeklyStats) : undefined,
-        }),
+        body: JSON.stringify(payload),
       });
+      if (res.status === 403 && await restoreLeaderboardProfileOnBackend(profile)) {
+        res = await fetch(`${API_URL}/players/stats/import`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
       if (!res.ok) return;
       await AsyncStorage.setItem(importKey, '1');
       await AsyncStorage.setItem(legacyImportKey, '1');
