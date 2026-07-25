@@ -176,6 +176,40 @@ export interface PublicProfile {
   achievements: AchievementProgress[];
 }
 
+export interface PublicPlayer {
+  user_id: string;
+  username: string;
+  emoji: string;
+}
+
+export interface FriendPlayer extends PublicPlayer {
+  online: boolean;
+  status: string;
+  room_id?: string | null;
+  last_seen_at?: string | null;
+}
+
+export interface FriendRequestItem {
+  request_id: string;
+  created_at: string;
+  from_player?: PublicPlayer;
+  to_player?: PublicPlayer;
+}
+
+export interface PartyInviteItem {
+  invite_id: string;
+  room_id: string;
+  created_at: string;
+  from_player: PublicPlayer;
+}
+
+export interface FriendsState {
+  friends: FriendPlayer[];
+  incoming_requests: FriendRequestItem[];
+  outgoing_requests: FriendRequestItem[];
+  party_invites: PartyInviteItem[];
+}
+
 interface GameStateContextType {
   difficulty: string;
   wordLength: number;
@@ -185,6 +219,8 @@ interface GameStateContextType {
   playerName: string;
   playerEmoji: string;
   leaderboardProfile: LeaderboardProfile | null;
+  friendsState: FriendsState | null;
+  pendingPartyInvite: PartyInviteItem | null;
   roomPlayers: RoomPlayer[];
   maxRoomPlayers: number;
   typingPlayerName: string | null;
@@ -211,6 +247,13 @@ interface GameStateContextType {
   checkUsername: (username: string) => Promise<{ available: boolean; valid: boolean; message?: string | null }>;
   fetchLeaderboard: (scope?: string, period?: 'weekly' | 'all_time') => Promise<LeaderboardResponse | null>;
   fetchPublicProfile: (userId: string) => Promise<PublicProfile | null>;
+  fetchFriends: () => Promise<FriendsState | null>;
+  searchPlayers: (query: string) => Promise<PublicPlayer[]>;
+  sendFriendRequest: (toUserId: string) => Promise<boolean>;
+  respondFriendRequest: (requestId: string, accept: boolean) => Promise<boolean>;
+  inviteFriendToRoom: (toUserId: string) => Promise<boolean>;
+  respondPartyInvite: (inviteId: string, accept: boolean) => Promise<boolean>;
+  clearPendingPartyInvite: () => void;
   leaveRoom: (options?: { forgetIdentity?: boolean }) => void;
   createSharedGame: () => Promise<void>;
   createIndividualGame: () => Promise<void>;
@@ -263,6 +306,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState('Player');
   const [leaderboardProfile, setLeaderboardProfile] = useState<LeaderboardProfile | null>(null);
+  const [friendsState, setFriendsState] = useState<FriendsState | null>(null);
+  const [pendingPartyInvite, setPendingPartyInvite] = useState<PartyInviteItem | null>(null);
   const [playerEmoji, setPlayerEmoji] = useState('🙂');
   const [roomPlayers, setRoomPlayers] = useState<RoomPlayer[]>([]);
   const [maxRoomPlayers, setMaxRoomPlayers] = useState(8);
@@ -298,6 +343,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const currentGuessRef = useRef('');
   const sessionIdRef = useRef<string | null>(null);
   const dailyDateRef = useRef<string | null>(null);
+  const socialSocketRef = useRef<WebSocket | null>(null);
   const submittingRef = useRef(false);
   const inputSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputSyncSeq = useRef(0);
@@ -374,6 +420,63 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (!leaderboardProfile) {
+      socialSocketRef.current?.close();
+      socialSocketRef.current = null;
+      setFriendsState(null);
+      return;
+    }
+
+    void fetchFriends();
+    const wsBase = API_URL.replace(/^http/, 'ws');
+    const socket = new WebSocket(`${wsBase}/ws?user_id=${encodeURIComponent(leaderboardProfile.user_id)}&leaderboard_token=${encodeURIComponent(leaderboardProfile.leaderboard_token)}`);
+    socialSocketRef.current = socket;
+    socket.onmessage = event => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'friend_request') {
+          showToast('New friend request', 'info');
+          void fetchFriends();
+        } else if (message.type === 'friend_response') {
+          showToast('Friend list updated', 'info');
+          void fetchFriends();
+        } else if (message.type === 'party_invite') {
+          setPendingPartyInvite(message.invite);
+          showToast('Party invite received', 'info');
+          void fetchFriends();
+        } else if (message.type === 'party_invite_response') {
+          showToast('Party invite updated', 'info');
+        }
+      } catch {
+        // Ignore malformed realtime messages.
+      }
+    };
+
+    const statusForPresence = () => roomId ? 'party' : dailyDate ? 'daily' : sessionId ? 'solo' : 'online';
+    const sendPresence = () => {
+      const payload = JSON.stringify({ type: 'presence', status: statusForPresence(), room_id: roomId });
+      if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+      fetch(`${API_URL}/presence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: leaderboardProfile.user_id,
+          leaderboard_token: leaderboardProfile.leaderboard_token,
+          status: statusForPresence(),
+          room_id: roomId,
+        }),
+      }).catch(() => {});
+    };
+    socket.onopen = sendPresence;
+    const timer = setInterval(sendPresence, 25000);
+    return () => {
+      clearInterval(timer);
+      socket.close();
+      if (socialSocketRef.current === socket) socialSocketRef.current = null;
+    };
+  }, [leaderboardProfile?.user_id, roomId, dailyDate, sessionId]);
 
   useEffect(() => {
     AsyncStorage.getItem(ROOM_STORAGE_KEY).then(async val => {
@@ -768,6 +871,134 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return null;
     }
   };
+
+  const authQuery = (profile = leaderboardProfile) => {
+    if (!profile) return '';
+    return `user_id=${encodeURIComponent(profile.user_id)}&leaderboard_token=${encodeURIComponent(profile.leaderboard_token)}`;
+  };
+
+  const fetchFriends = async () => {
+    if (!leaderboardProfile) return null;
+    try {
+      const res = await fetch(`${API_URL}/friends?${authQuery(leaderboardProfile)}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      setFriendsState(data);
+      if (data.party_invites?.length && !pendingPartyInvite) {
+        setPendingPartyInvite(data.party_invites[0]);
+      }
+      return data;
+    } catch {
+      return null;
+    }
+  };
+
+  const searchPlayers = async (query: string) => {
+    if (!leaderboardProfile || query.trim().length < 2) return [];
+    try {
+      const res = await fetch(`${API_URL}/players/search?q=${encodeURIComponent(query.trim())}&user_id=${encodeURIComponent(leaderboardProfile.user_id)}`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.players ?? [];
+    } catch {
+      return [];
+    }
+  };
+
+  const sendFriendRequest = async (toUserId: string) => {
+    if (!leaderboardProfile) return false;
+    try {
+      const res = await fetch(`${API_URL}/friends/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: leaderboardProfile.user_id,
+          leaderboard_token: leaderboardProfile.leaderboard_token,
+          to_user_id: toUserId,
+        }),
+      });
+      if (!res.ok) throw new Error('friend');
+      showToast('Friend request sent', 'info');
+      await fetchFriends();
+      return true;
+    } catch {
+      showToast('Could not send friend request', 'warning');
+      return false;
+    }
+  };
+
+  const respondFriendRequest = async (requestId: string, accept: boolean) => {
+    if (!leaderboardProfile) return false;
+    try {
+      const res = await fetch(`${API_URL}/friends/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: leaderboardProfile.user_id,
+          leaderboard_token: leaderboardProfile.leaderboard_token,
+          request_id: requestId,
+          accept,
+        }),
+      });
+      if (!res.ok) throw new Error('friend');
+      showToast(accept ? 'Friend added' : 'Request declined', 'info');
+      await fetchFriends();
+      return true;
+    } catch {
+      showToast('Could not update friend request', 'warning');
+      return false;
+    }
+  };
+
+  const inviteFriendToRoom = async (toUserId: string) => {
+    if (!leaderboardProfile || !roomId) {
+      showToast('Create or join a party first', 'warning');
+      return false;
+    }
+    try {
+      const res = await fetch(`${API_URL}/party-invites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: leaderboardProfile.user_id,
+          leaderboard_token: leaderboardProfile.leaderboard_token,
+          to_user_id: toUserId,
+          room_id: roomId,
+        }),
+      });
+      if (!res.ok) throw new Error('invite');
+      showToast('Party invite sent', 'info');
+      return true;
+    } catch {
+      showToast('Could not invite that friend', 'warning');
+      return false;
+    }
+  };
+
+  const respondPartyInvite = async (inviteId: string, accept: boolean) => {
+    if (!leaderboardProfile) return false;
+    try {
+      const res = await fetch(`${API_URL}/party-invites/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: leaderboardProfile.user_id,
+          leaderboard_token: leaderboardProfile.leaderboard_token,
+          invite_id: inviteId,
+          accept,
+        }),
+      });
+      if (!res.ok) throw new Error('invite');
+      if (pendingPartyInvite?.invite_id === inviteId) setPendingPartyInvite(null);
+      await fetchFriends();
+      return true;
+    } catch {
+      showToast('Could not update invite', 'warning');
+      return false;
+    }
+  };
+
+  const clearPendingPartyInvite = () => setPendingPartyInvite(null);
 
   const triggerShake = () => setInvalidShake(v => v + 1);
 
@@ -1466,11 +1697,12 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   return (
     <GameStateContext.Provider value={{
-      difficulty, wordLength, sessionId, roomId, playerId, playerName, playerEmoji, leaderboardProfile,
+      difficulty, wordLength, sessionId, roomId, playerId, playerName, playerEmoji, leaderboardProfile, friendsState, pendingPartyInvite,
       roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard, sharedBoard, individualBoard, shareRequest, chatMessages,
       guesses, results, currentGuess, gameStatus, letterStates, stats, dailyDate, dailyStreak,
       startGame, startDailyGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
-      registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile,
+      registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile, fetchFriends, searchPlayers,
+      sendFriendRequest, respondFriendRequest, inviteFriendToRoom, respondPartyInvite, clearPendingPartyInvite,
       changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, sendChatMessage, addLetter, removeLetter,
       submitGuess, getHint, hints, hintsUsed, invalidShake, lastSubmittedRow,
       answer, answerInfo, maxGuesses, toast,

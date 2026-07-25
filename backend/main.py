@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
@@ -9,18 +9,27 @@ import os
 import string
 import random
 import hashlib
+import json
 
 from words import get_word, VALID_GUESSES, ANSWER_WORDS
 from word_metadata import get_word_metadata, validate_metadata_coverage
 from leaderboard import (
+    create_friend_request,
+    create_party_invite,
+    friends_state,
     init_db,
     import_player_stats,
     leaderboard as get_leaderboard,
     public_profile as get_public_profile,
     record_result,
     register_player,
+    respond_friend_request,
+    respond_party_invite,
+    search_players,
+    touch_presence,
     username_available,
     validate_username,
+    verify_player,
 )
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -44,6 +53,7 @@ app.add_middleware(
 from typing import Dict, Any
 sessions: Dict[str, Dict[str, Any]] = {}
 rooms: Dict[str, Dict[str, Any]] = {}
+active_social_sockets: Dict[str, set[WebSocket]] = {}
 
 MAX_ROOM_PLAYERS = 8
 ROOM_IDLE_TTL = timedelta(minutes=45)
@@ -229,6 +239,35 @@ class UsernameAvailabilityResponse(BaseModel):
     valid: bool
     message: str | None = None
 
+class FriendRequestCreate(BaseModel):
+    user_id: str
+    leaderboard_token: str
+    to_user_id: str
+
+class FriendRequestRespondModel(BaseModel):
+    user_id: str
+    leaderboard_token: str
+    request_id: str
+    accept: bool
+
+class PresenceRequest(BaseModel):
+    user_id: str
+    leaderboard_token: str
+    status: str = "online"
+    room_id: str | None = None
+
+class PartyInviteCreate(BaseModel):
+    user_id: str
+    leaderboard_token: str
+    to_user_id: str
+    room_id: str
+
+class PartyInviteRespondModel(BaseModel):
+    user_id: str
+    leaderboard_token: str
+    invite_id: str
+    accept: bool
+
 class LeaderboardEntry(BaseModel):
     rank: int
     user_id: str
@@ -285,6 +324,19 @@ def _scoring_rules() -> dict[str, Any]:
         "formula": "base win points + efficiency bonus + no-hint bonus - hint penalty",
     }
 
+async def _notify_social(user_id: str | None, event: dict[str, Any]) -> None:
+    if not user_id:
+        return
+    sockets = list(active_social_sockets.get(user_id, set()))
+    stale: list[WebSocket] = []
+    for socket in sockets:
+        try:
+            await socket.send_text(json.dumps(event))
+        except Exception:
+            stale.append(socket)
+    for socket in stale:
+        active_social_sockets.get(user_id, set()).discard(socket)
+
 @app.post("/players/register", response_model=PlayerRegisterResponse)
 def register_public_player(req: PlayerRegisterRequest):
     try:
@@ -312,12 +364,87 @@ def import_public_player_stats(req: StatsImportRequest):
         raise HTTPException(status_code=403, detail="Could not import player stats")
     return {"imported": True}
 
+@app.get("/players/search")
+def search_public_players(q: str, user_id: str | None = None):
+    return {"players": search_players(q, user_id)}
+
+@app.get("/friends")
+def read_friends(user_id: str, leaderboard_token: str):
+    state = friends_state(user_id, leaderboard_token)
+    if state is None:
+        raise HTTPException(status_code=403, detail="Invalid player")
+    return state
+
+@app.post("/friends/request")
+async def request_friend(req: FriendRequestCreate):
+    result = create_friend_request(req.user_id, req.leaderboard_token, req.to_user_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="Could not send friend request")
+    await _notify_social(req.to_user_id, {"type": "friend_request", "request": result})
+    return result
+
+@app.post("/friends/respond")
+async def respond_friend(req: FriendRequestRespondModel):
+    result = respond_friend_request(req.user_id, req.leaderboard_token, req.request_id, req.accept)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Friend request not found")
+    await _notify_social(result.get("from_user_id"), {"type": "friend_response", "response": result})
+    return result
+
+@app.post("/presence")
+def update_presence(req: PresenceRequest):
+    if not touch_presence(req.user_id, req.leaderboard_token, req.status, req.room_id):
+        raise HTTPException(status_code=403, detail="Invalid player")
+    return {"ok": True}
+
+@app.post("/party-invites")
+async def request_party_invite(req: PartyInviteCreate):
+    result = create_party_invite(req.user_id, req.leaderboard_token, req.to_user_id, req.room_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="Could not invite friend")
+    await _notify_social(req.to_user_id, {"type": "party_invite", "invite": result})
+    return result
+
+@app.post("/party-invites/respond")
+async def respond_invite(req: PartyInviteRespondModel):
+    result = respond_party_invite(req.user_id, req.leaderboard_token, req.invite_id, req.accept)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    await _notify_social(result.get("from_user_id"), {"type": "party_invite_response", "response": result})
+    return result
+
 @app.get("/players/{user_id}/public-profile", response_model=PublicProfileResponse)
 def read_public_profile(user_id: str):
     profile = get_public_profile(user_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Player not found")
     return PublicProfileResponse(**profile)
+
+@app.websocket("/ws")
+async def social_socket(websocket: WebSocket, user_id: str, leaderboard_token: str):
+    if not verify_player(user_id, leaderboard_token):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    active_social_sockets.setdefault(user_id, set()).add(websocket)
+    touch_presence(user_id, leaderboard_token, "online")
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if message.get("type") == "presence":
+                touch_presence(user_id, leaderboard_token, message.get("status") or "online", message.get("room_id"))
+                await websocket.send_text(json.dumps({"type": "presence_ack"}))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        active_social_sockets.get(user_id, set()).discard(websocket)
+        if not active_social_sockets.get(user_id):
+            active_social_sockets.pop(user_id, None)
+            touch_presence(user_id, leaderboard_token, "offline")
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

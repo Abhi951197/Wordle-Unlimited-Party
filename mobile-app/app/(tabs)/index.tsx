@@ -22,7 +22,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
 import { WordGrid } from '@/components/WordGrid';
-import { AchievementProgress, ActiveBoard, AnswerInfo, ChatMessage, HintState, LeaderboardEntry, LeaderboardResponse, PublicProfile, PublicStatsScope, useGameState } from '@/store/GameState';
+import { AchievementProgress, ActiveBoard, AnswerInfo, ChatMessage, FriendPlayer, HintState, LeaderboardEntry, LeaderboardResponse, PublicPlayer, PublicProfile, PublicStatsScope, useGameState } from '@/store/GameState';
 import { trackEvent } from '@/utils/analytics';
 
 const DIFF_META: Record<string, { color: string; label: string; desc: string; guesses: string; mark: string }> = {
@@ -90,6 +90,7 @@ export default function GameScreen() {
   const {
     startGame, startDailyGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, changeRoomDifficulty,
     registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile, leaderboardProfile,
+    friendsState, pendingPartyInvite, fetchFriends, searchPlayers, sendFriendRequest, respondFriendRequest, inviteFriendToRoom, respondPartyInvite, clearPendingPartyInvite,
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
     sessionId, difficulty, roomId, playerId, playerEmoji, roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard,
@@ -114,6 +115,10 @@ export default function GameScreen() {
   const [hintModal, setHintModal] = useState(false);
   const [leaderboardModal, setLeaderboardModal] = useState(false);
   const [profileModal, setProfileModal] = useState(false);
+  const [friendsModal, setFriendsModal] = useState(false);
+  const [friendSearch, setFriendSearch] = useState('');
+  const [friendResults, setFriendResults] = useState<PublicPlayer[]>([]);
+  const [friendSearching, setFriendSearching] = useState(false);
   const [leaderboardTab, setLeaderboardTab] = useState<LeaderboardTab>('overall');
   const [leaderboardPeriod, setLeaderboardPeriod] = useState<LeaderboardPeriod>('weekly');
   const [leaderboardData, setLeaderboardData] = useState<LeaderboardResponse | null>(null);
@@ -200,6 +205,26 @@ export default function GameScreen() {
     setRoomName(leaderboardProfile.username);
     setSelectedEmoji(leaderboardProfile.emoji || selectedEmoji);
   }, [leaderboardProfile?.user_id]);
+
+  useEffect(() => {
+    if (!friendsModal || friendSearch.trim().length < 2) {
+      setFriendResults([]);
+      return;
+    }
+    let cancelled = false;
+    setFriendSearching(true);
+    const timer = setTimeout(async () => {
+      const results = await searchPlayers(friendSearch);
+      if (!cancelled) {
+        setFriendResults(results);
+        setFriendSearching(false);
+      }
+    }, 260);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [friendsModal, friendSearch]);
 
   useEffect(() => {
     if (roomId) void saveRecentRoom(roomId, roomName);
@@ -345,6 +370,12 @@ export default function GameScreen() {
     return false;
   };
 
+  const openFriends = async () => {
+    if (!leaderboardProfile && !ensureLeaderboardProfile()) return;
+    setFriendsModal(true);
+    await fetchFriends();
+  };
+
   function playFeedback(kind: 'key' | 'delete' | 'submit' | 'win', vibrate = true) {
     if (settings.sound && Platform.OS === 'web' && typeof window !== 'undefined') {
       try {
@@ -486,6 +517,18 @@ export default function GameScreen() {
     }
   };
 
+  const acceptPartyInvite = async (inviteId: string, inviteRoomId: string) => {
+    if (!leaderboardProfile) return;
+    const accepted = await respondPartyInvite(inviteId, true);
+    if (!accepted) return;
+    const joined = await joinRoom(inviteRoomId, leaderboardProfile.username, leaderboardProfile.emoji || selectedEmoji);
+    if (joined) {
+      setSelectedMode('party');
+      setView('party');
+      setFriendsModal(false);
+    }
+  };
+
   const switchBoard = (board: ActiveBoard) => {
     if (activeBoard !== board) setActiveBoard(board);
   };
@@ -537,6 +580,7 @@ export default function GameScreen() {
       <View style={styles.topActions}>
         {roomId && roomActions && <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => setRoomModal(true)}><IconMark name="info" color={palette.text} /></TouchableOpacity>}
         <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => openLeaderboard('overall')}><Text style={[styles.smallIconText, { color: '#FACC15' }]}>🏆</Text></TouchableOpacity>
+        <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={openFriends}><Text style={[styles.smallIconText, { color: '#60A5FA' }]}>F</Text></TouchableOpacity>
         <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => setDiffModal(true)}><Text style={[styles.smallIconText, { color: activeMeta.color }]}>{activeMeta.mark}</Text></TouchableOpacity>
         <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => { trackEvent('Settings Opened'); setSettingsModal(true); }}><IconMark name="dots" color={palette.text} /></TouchableOpacity>
       </View>
@@ -686,6 +730,7 @@ export default function GameScreen() {
                   </View>
                 </View>
                 <View style={styles.homeNav}>
+                  <TouchableOpacity style={styles.homeNavButton} onPress={openFriends}><Text style={styles.homeNavButtonText}>Friends</Text></TouchableOpacity>
                   <TouchableOpacity style={styles.homeNavButton} onPress={() => openLeaderboard('overall')}><Text style={styles.homeNavButtonText}>Leaderboard</Text></TouchableOpacity>
                   <Link href={'/how-to-play' as never} style={styles.homeNavLink}>How to Play</Link>
                   <Link href={'/features' as never} style={styles.homeNavLink}>Features</Link>
@@ -924,6 +969,107 @@ export default function GameScreen() {
           </View>
           <TouchableOpacity style={styles.dangerBtn} onPress={() => { leaveRoom(); setRoomModal(false); setView('mode'); }}><Text style={styles.dangerText}>Leave Room</Text></TouchableOpacity>
         </View>
+      </Modal>
+
+      <Modal visible={friendsModal} transparent animationType="slide" onRequestClose={() => setFriendsModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setFriendsModal(false)}><View style={styles.modalBackdrop} /></TouchableWithoutFeedback>
+        <View style={styles.sheet}>
+          <View style={styles.sheetHeader}>
+            <View>
+              <Text style={styles.sheetTitle}>Friends</Text>
+              <Text style={styles.helpText}>Add friends by username and invite online friends.</Text>
+            </View>
+            <TouchableOpacity style={styles.closeIconBtn} onPress={() => setFriendsModal(false)}><IconMark name="x" color={palette.text} /></TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.friendsScroll} showsVerticalScrollIndicator={false}>
+          {!!friendsState?.party_invites?.length && (
+            <View style={styles.socialSection}>
+              <Text style={styles.socialSectionTitle}>Party Invites</Text>
+              {friendsState.party_invites.map(invite => (
+                <View key={invite.invite_id} style={styles.socialRow}>
+                  <Text style={styles.socialAvatar}>{invite.from_player.emoji}</Text>
+                  <View style={styles.socialInfo}>
+                    <Text style={styles.socialName} numberOfLines={1}>{invite.from_player.username}</Text>
+                    <Text style={styles.socialMeta}>Room {invite.room_id}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.acceptBtn} onPress={() => acceptPartyInvite(invite.invite_id, invite.room_id)}><Text style={styles.acceptText}>Join</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.declineBtn} onPress={() => respondPartyInvite(invite.invite_id, false)}><Text style={styles.declineText}>No</Text></TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {!!friendsState?.incoming_requests?.length && (
+            <View style={styles.socialSection}>
+              <Text style={styles.socialSectionTitle}>Friend Requests</Text>
+              {friendsState.incoming_requests.map(request => request.from_player && (
+                <View key={request.request_id} style={styles.socialRow}>
+                  <Text style={styles.socialAvatar}>{request.from_player.emoji}</Text>
+                  <View style={styles.socialInfo}>
+                    <Text style={styles.socialName} numberOfLines={1}>{request.from_player.username}</Text>
+                    <Text style={styles.socialMeta}>wants to be friends</Text>
+                  </View>
+                  <TouchableOpacity style={styles.acceptBtn} onPress={() => respondFriendRequest(request.request_id, true)}><Text style={styles.acceptText}>Accept</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.declineBtn} onPress={() => respondFriendRequest(request.request_id, false)}><Text style={styles.declineText}>No</Text></TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+
+          <View style={styles.socialSection}>
+            <Text style={styles.socialSectionTitle}>Find Players</Text>
+            <TextInput style={styles.input} value={friendSearch} onChangeText={setFriendSearch} placeholder="Search username" placeholderTextColor="#64748B" autoCapitalize="none" />
+            {friendSearching && <ActivityIndicator color="#16C75A" />}
+            {friendResults.map(player => {
+              const alreadyFriend = friendsState?.friends.some(friend => friend.user_id === player.user_id);
+              const alreadyRequested = friendsState?.outgoing_requests.some(request => request.to_player?.user_id === player.user_id);
+              return (
+                <View key={player.user_id} style={styles.socialRow}>
+                  <Text style={styles.socialAvatar}>{player.emoji}</Text>
+                  <View style={styles.socialInfo}>
+                    <Text style={styles.socialName} numberOfLines={1}>{player.username}</Text>
+                    <Text style={styles.socialMeta}>{alreadyFriend ? 'Already friends' : alreadyRequested ? 'Request sent' : 'Leaderboard player'}</Text>
+                  </View>
+                  <TouchableOpacity disabled={alreadyFriend || alreadyRequested} style={[styles.acceptBtn, (alreadyFriend || alreadyRequested) && styles.disabledBtn]} onPress={() => sendFriendRequest(player.user_id)}>
+                    <Text style={styles.acceptText}>{alreadyFriend ? 'Added' : alreadyRequested ? 'Sent' : 'Add'}</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+
+          <View style={styles.socialSection}>
+            <Text style={styles.socialSectionTitle}>Friends List</Text>
+            {friendsState?.friends?.length ? friendsState.friends.map((friend: FriendPlayer) => (
+              <View key={friend.user_id} style={styles.socialRow}>
+                <Text style={styles.socialAvatar}>{friend.emoji}</Text>
+                <View style={styles.socialInfo}>
+                  <Text style={styles.socialName} numberOfLines={1}>{friend.username}</Text>
+                  <Text style={styles.socialMeta}>{friend.online ? friend.status || 'online' : 'offline'}</Text>
+                </View>
+                <View style={[styles.onlineDot, friend.online ? styles.onlineDotActive : styles.onlineDotMuted]} />
+                {roomId && friend.online && <TouchableOpacity style={styles.inviteBtn} onPress={() => inviteFriendToRoom(friend.user_id)}><Text style={styles.inviteText}>Invite</Text></TouchableOpacity>}
+              </View>
+            )) : (
+              <Text style={styles.emptySocialText}>No friends yet. Search a username to add someone.</Text>
+            )}
+          </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal visible={!!pendingPartyInvite} transparent animationType="fade" onRequestClose={clearPendingPartyInvite}>
+        <TouchableWithoutFeedback onPress={clearPendingPartyInvite}><View style={styles.modalBackdrop} /></TouchableWithoutFeedback>
+        {pendingPartyInvite && (
+          <View style={styles.invitePopup}>
+            <Text style={styles.socialAvatar}>{pendingPartyInvite.from_player.emoji}</Text>
+            <Text style={styles.sheetTitle}>{pendingPartyInvite.from_player.username} invited you</Text>
+            <Text style={styles.helpText}>Join party room {pendingPartyInvite.room_id}</Text>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => acceptPartyInvite(pendingPartyInvite.invite_id, pendingPartyInvite.room_id)}><Text style={styles.primaryText}>Join Party</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.outlineBtn} onPress={() => { respondPartyInvite(pendingPartyInvite.invite_id, false); clearPendingPartyInvite(); }}><Text style={styles.outlineText}>Decline</Text></TouchableOpacity>
+          </View>
+        )}
       </Modal>
 
       <Modal visible={helpModal} transparent animationType="fade" onRequestClose={() => setHelpModal(false)}>
@@ -1661,6 +1807,23 @@ const styles = StyleSheet.create({
   promptText: { color: '#FDE68A', fontWeight: '800', fontSize: 13 },
   promptRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
   acceptBtn: { backgroundColor: '#16C75A', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8 },
+  acceptText: { color: '#FFFFFF', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  declineBtn: { borderRadius: 12, borderWidth: 1, borderColor: '#EF4444', paddingHorizontal: 12, paddingVertical: 8 },
+  declineText: { color: '#FCA5A5', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  disabledBtn: { opacity: 0.45 },
+  socialSection: { gap: 8, marginTop: 4 },
+  friendsScroll: { maxHeight: 520 },
+  socialSectionTitle: { color: '#F8FAFC', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  socialRow: { minHeight: 54, borderRadius: 15, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  socialAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#1F2937', textAlign: 'center', textAlignVertical: 'center', fontSize: 18, overflow: 'hidden' },
+  socialInfo: { flex: 1, minWidth: 0 },
+  socialName: { color: '#F8FAFC', fontSize: 13, fontWeight: '900' },
+  socialMeta: { color: '#9CA3AF', fontSize: 11, fontWeight: '800', marginTop: 2, textTransform: 'capitalize' },
+  onlineDotActive: { backgroundColor: '#16C75A' },
+  onlineDotMuted: { backgroundColor: '#64748B' },
+  inviteText: { color: '#FDE68A', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  emptySocialText: { color: '#9CA3AF', fontSize: 12, fontWeight: '800', textAlign: 'center', paddingVertical: 8 },
+  invitePopup: { position: 'absolute', left: 22, right: 22, top: '34%', borderRadius: 22, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', padding: 20, gap: 10, alignItems: 'center' },
   ghostBtn: { minHeight: 44, borderRadius: 14, borderWidth: 1, borderColor: '#283447', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
   btnText: { color: '#fff', fontWeight: '900', fontSize: 12 },
   ghostText: { color: '#F8FAFC', fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },

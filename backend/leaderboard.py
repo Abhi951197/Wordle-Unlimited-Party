@@ -258,6 +258,44 @@ def init_db() -> None:
                 FOREIGN KEY (user_id) REFERENCES players(user_id)
             )
         """)
+        _execute(conn, """
+            CREATE TABLE IF NOT EXISTS friend_requests (
+                request_id TEXT PRIMARY KEY,
+                from_user_id TEXT NOT NULL,
+                to_user_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (from_user_id, to_user_id)
+            )
+        """)
+        _execute(conn, """
+            CREATE TABLE IF NOT EXISTS friendships (
+                user_a TEXT NOT NULL,
+                user_b TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_a, user_b)
+            )
+        """)
+        _execute(conn, """
+            CREATE TABLE IF NOT EXISTS player_presence (
+                user_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'online',
+                room_id TEXT,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        _execute(conn, """
+            CREATE TABLE IF NOT EXISTS party_invites (
+                invite_id TEXT PRIMARY KEY,
+                from_user_id TEXT NOT NULL,
+                to_user_id TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         _backfill_stats_from_results(conn)
         _repair_leaderboard_stats(conn)
 
@@ -489,6 +527,232 @@ def verify_player(user_id: str | None, token: str | None) -> dict[str, Any] | No
     if not player or player["token_hash"] != _hash_token(token):
         return None
     return player
+
+
+def _friend_pair(user_a: str, user_b: str) -> tuple[str, str]:
+    return tuple(sorted((user_a, user_b)))
+
+
+def _public_player(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "user_id": row["user_id"],
+        "username": row["username"],
+        "emoji": row.get("emoji") or "🙂",
+    }
+
+
+def _is_online(updated_at: str | None) -> bool:
+    if not updated_at:
+        return False
+    return datetime.now(timezone.utc) - _parse_iso(updated_at) <= timedelta(seconds=75)
+
+
+def touch_presence(user_id: str | None, token: str | None, status: str = "online", room_id: str | None = None) -> bool:
+    if not verify_player(user_id, token):
+        return False
+    now = _now_iso()
+    status = status if status in {"online", "idle", "solo", "daily", "party", "offline"} else "online"
+    with _conn() as conn:
+        _execute(
+            conn,
+            """
+            INSERT INTO player_presence (user_id, status, room_id, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET
+                status = excluded.status,
+                room_id = excluded.room_id,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, status, room_id, now),
+        )
+    return True
+
+
+def search_players(query: str, current_user_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+    normalized = normalize_username(query)
+    if len(normalized) < 2:
+        return []
+    limit = min(max(limit, 1), 20)
+    with _conn() as conn:
+        rows = [_row_to_dict(row) for row in _execute(
+            conn,
+            "SELECT user_id, username, emoji FROM players WHERE username LIKE ? AND user_id <> ? ORDER BY username ASC LIMIT ?",
+            (f"%{normalized}%", current_user_id or "", limit),
+        ).fetchall()]
+    return [_public_player(row) for row in rows if row]
+
+
+def friends_state(user_id: str | None, token: str | None) -> dict[str, Any] | None:
+    if not verify_player(user_id, token):
+        return None
+    touch_presence(user_id, token)
+    with _conn() as conn:
+        friendship_rows = [_row_to_dict(row) for row in _execute(
+            conn,
+            """
+            SELECT p.user_id, p.username, p.emoji, pr.status, pr.room_id, pr.updated_at
+            FROM friendships f
+            JOIN players p ON p.user_id = CASE WHEN f.user_a = ? THEN f.user_b ELSE f.user_a END
+            LEFT JOIN player_presence pr ON pr.user_id = p.user_id
+            WHERE f.user_a = ? OR f.user_b = ?
+            ORDER BY p.username ASC
+            """,
+            (user_id, user_id, user_id),
+        ).fetchall()]
+        incoming_rows = [_row_to_dict(row) for row in _execute(
+            conn,
+            """
+            SELECT fr.request_id, fr.created_at, p.user_id, p.username, p.emoji
+            FROM friend_requests fr
+            JOIN players p ON p.user_id = fr.from_user_id
+            WHERE fr.to_user_id = ? AND fr.status = 'pending'
+            ORDER BY fr.created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()]
+        outgoing_rows = [_row_to_dict(row) for row in _execute(
+            conn,
+            """
+            SELECT fr.request_id, fr.created_at, p.user_id, p.username, p.emoji
+            FROM friend_requests fr
+            JOIN players p ON p.user_id = fr.to_user_id
+            WHERE fr.from_user_id = ? AND fr.status = 'pending'
+            ORDER BY fr.created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()]
+        invite_rows = [_row_to_dict(row) for row in _execute(
+            conn,
+            """
+            SELECT pi.invite_id, pi.room_id, pi.created_at, p.user_id, p.username, p.emoji
+            FROM party_invites pi
+            JOIN players p ON p.user_id = pi.from_user_id
+            WHERE pi.to_user_id = ? AND pi.status = 'pending'
+            ORDER BY pi.created_at DESC
+            LIMIT 10
+            """,
+            (user_id,),
+        ).fetchall()]
+
+    return {
+        "friends": [
+            {
+                **(_public_player(row) or {}),
+                "online": _is_online(row.get("updated_at")),
+                "status": row.get("status") or "offline",
+                "room_id": row.get("room_id"),
+                "last_seen_at": row.get("updated_at"),
+            }
+            for row in friendship_rows if row
+        ],
+        "incoming_requests": [
+            {"request_id": row["request_id"], "created_at": row["created_at"], "from_player": _public_player(row)}
+            for row in incoming_rows if row
+        ],
+        "outgoing_requests": [
+            {"request_id": row["request_id"], "created_at": row["created_at"], "to_player": _public_player(row)}
+            for row in outgoing_rows if row
+        ],
+        "party_invites": [
+            {"invite_id": row["invite_id"], "room_id": row["room_id"], "created_at": row["created_at"], "from_player": _public_player(row)}
+            for row in invite_rows if row
+        ],
+    }
+
+
+def create_friend_request(user_id: str | None, token: str | None, to_user_id: str) -> dict[str, Any] | None:
+    player = verify_player(user_id, token)
+    if not player or not to_user_id or to_user_id == user_id:
+        return None
+    a, b = _friend_pair(user_id, to_user_id)
+    now = _now_iso()
+    with _conn() as conn:
+        if _execute(conn, "SELECT 1 FROM players WHERE user_id = ?", (to_user_id,)).fetchone() is None:
+            return None
+        if _execute(conn, "SELECT 1 FROM friendships WHERE user_a = ? AND user_b = ?", (a, b)).fetchone() is not None:
+            return {"status": "friends", "to_user_id": to_user_id}
+        reverse = _row_to_dict(_execute(
+            conn,
+            "SELECT * FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'",
+            (to_user_id, user_id),
+        ).fetchone())
+        if reverse:
+            respond_friend_request(user_id, token, reverse["request_id"], True)
+            return {"status": "accepted", "to_user_id": to_user_id}
+        request_id = str(uuid.uuid4())
+        _execute(
+            conn,
+            """
+            INSERT INTO friend_requests (request_id, from_user_id, to_user_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, 'pending', ?, ?)
+            ON CONFLICT (from_user_id, to_user_id) DO UPDATE SET
+                status = 'pending',
+                updated_at = excluded.updated_at
+            """,
+            (request_id, user_id, to_user_id, now, now),
+        )
+    return {"status": "pending", "request_id": request_id, "from_player": _public_player(player), "to_user_id": to_user_id}
+
+
+def respond_friend_request(user_id: str | None, token: str | None, request_id: str, accept: bool) -> dict[str, Any] | None:
+    if not verify_player(user_id, token):
+        return None
+    now = _now_iso()
+    with _conn() as conn:
+        request = _row_to_dict(_execute(
+            conn,
+            "SELECT * FROM friend_requests WHERE request_id = ? AND to_user_id = ? AND status = 'pending'",
+            (request_id, user_id),
+        ).fetchone())
+        if not request:
+            return None
+        status = "accepted" if accept else "declined"
+        _execute(conn, "UPDATE friend_requests SET status = ?, updated_at = ? WHERE request_id = ?", (status, now, request_id))
+        if accept:
+            a, b = _friend_pair(request["from_user_id"], request["to_user_id"])
+            _execute(
+                conn,
+                "INSERT INTO friendships (user_a, user_b, created_at) VALUES (?, ?, ?) ON CONFLICT (user_a, user_b) DO NOTHING",
+                (a, b, now),
+            )
+    return {"status": status, "request_id": request_id, "from_user_id": request["from_user_id"], "to_user_id": request["to_user_id"]}
+
+
+def create_party_invite(user_id: str | None, token: str | None, to_user_id: str, room_id: str) -> dict[str, Any] | None:
+    player = verify_player(user_id, token)
+    if not player or not to_user_id or not room_id:
+        return None
+    a, b = _friend_pair(user_id, to_user_id)
+    now = _now_iso()
+    with _conn() as conn:
+        if _execute(conn, "SELECT 1 FROM friendships WHERE user_a = ? AND user_b = ?", (a, b)).fetchone() is None:
+            return None
+        invite_id = str(uuid.uuid4())
+        _execute(
+            conn,
+            "INSERT INTO party_invites (invite_id, from_user_id, to_user_id, room_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+            (invite_id, user_id, to_user_id, room_id.strip().upper(), now, now),
+        )
+    return {"invite_id": invite_id, "room_id": room_id.strip().upper(), "from_player": _public_player(player), "to_user_id": to_user_id, "created_at": now}
+
+
+def respond_party_invite(user_id: str | None, token: str | None, invite_id: str, accept: bool) -> dict[str, Any] | None:
+    if not verify_player(user_id, token):
+        return None
+    now = _now_iso()
+    with _conn() as conn:
+        invite = _row_to_dict(_execute(
+            conn,
+            "SELECT * FROM party_invites WHERE invite_id = ? AND to_user_id = ? AND status = 'pending'",
+            (invite_id, user_id),
+        ).fetchone())
+        if not invite:
+            return None
+        status = "accepted" if accept else "declined"
+        _execute(conn, "UPDATE party_invites SET status = ?, updated_at = ? WHERE invite_id = ?", (status, now, invite_id))
+    return {"status": status, "invite_id": invite_id, "from_user_id": invite["from_user_id"], "to_user_id": invite["to_user_id"], "room_id": invite["room_id"]}
 
 
 def score_for_game(difficulty: str, won: bool, guesses: int, hints_used: int) -> int:
