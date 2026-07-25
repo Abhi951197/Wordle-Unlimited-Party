@@ -1187,18 +1187,42 @@ def create_word_challenge(room_id: str, req: WordChallengeCreateRequest):
         raise HTTPException(status_code=422, detail="Choose a valid official answer word")
 
     old_challenge = room.get("word_challenge")
-    if old_challenge:
+    if old_challenge and old_challenge.get("status") == "active":
+        participant_ids = list(room["players"].keys())
+        if len(participant_ids) == 2 and req.player_id != old_challenge.get("chooser_player_id"):
+            chooser_player_id = old_challenge["chooser_player_id"]
+            old_session_id = old_challenge.get("sessions", {}).get(chooser_player_id)
+            if old_session_id:
+                sessions.pop(old_session_id, None)
+            session_id = _create_session(room.get("difficulty", "easy"), chosen_word)
+            _mark_session_leaderboard_context(session_id, "party", False)
+            old_challenge.setdefault("sessions", {})[chooser_player_id] = session_id
+            old_challenge.setdefault("player_words", {})[chooser_player_id] = chosen_word
+            room["player_active_boards"][chooser_player_id] = "challenge"
+            room["player_active_boards"][req.player_id] = "challenge"
+            _touch_room(room, req.player_id)
+            return _room_state(room_id, req.player_id)
+
+        for session_id in list(old_challenge.get("sessions", {}).values()):
+            sessions.pop(session_id, None)
+
+    elif old_challenge:
         for session_id in list(old_challenge.get("sessions", {}).values()):
             sessions.pop(session_id, None)
 
     difficulty = room.get("difficulty", "easy")
     chooser = room["players"][req.player_id]
     challenge_sessions: dict[str, str] = {}
+    player_words: dict[str, str] = {}
     for player_id in room["players"]:
-        word = get_word(difficulty) if player_id == req.player_id else chosen_word
+        if player_id == req.player_id:
+            room["player_active_boards"][player_id] = "challenge"
+            continue
+        word = chosen_word
         session_id = _create_session(difficulty, word)
         _mark_session_leaderboard_context(session_id, "party", False)
         challenge_sessions[player_id] = session_id
+        player_words[player_id] = word
         room["player_active_boards"][player_id] = "challenge"
 
     room["word_challenge"] = {
@@ -1207,6 +1231,7 @@ def create_word_challenge(room_id: str, req: WordChallengeCreateRequest):
         "chooser_name": chooser.get("player_name", "Player"),
         "chooser_emoji": chooser.get("player_emoji", "ðŸ™‚"),
         "chosen_word": chosen_word,
+        "player_words": player_words,
         "sessions": challenge_sessions,
         "status": "active",
         "created_at": _now_iso(),
@@ -1250,7 +1275,8 @@ def set_active_board(room_id: str, req: ActiveBoardRequest):
         _mark_session_leaderboard_context(room["player_sessions"][req.player_id], "party", False)
     if req.board == "challenge":
         challenge = room.get("word_challenge")
-        if not challenge or challenge.get("status") != "active" or req.player_id not in challenge.get("sessions", {}):
+        is_chooser = bool(challenge and challenge.get("chooser_player_id") == req.player_id)
+        if not challenge or challenge.get("status") != "active" or (req.player_id not in challenge.get("sessions", {}) and not is_chooser):
             raise HTTPException(status_code=404, detail="No active word challenge")
     room["player_active_boards"][req.player_id] = req.board
     _touch_room(room, req.player_id)

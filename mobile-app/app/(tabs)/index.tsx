@@ -134,7 +134,7 @@ export default function GameScreen() {
   const [usernameStatus, setUsernameStatus] = useState('');
   const [seenChatId, setSeenChatId] = useState<string | null>(null);
   const [chatPopupVisible, setChatPopupVisible] = useState(false);
-  const [challengeModal, setChallengeModal] = useState(false);
+  const [challengeSetupOpen, setChallengeSetupOpen] = useState(false);
   const [challengeWord, setChallengeWord] = useState('');
   const [challengeError, setChallengeError] = useState('');
   const [roomName, setRoomName] = useState('');
@@ -592,7 +592,7 @@ export default function GameScreen() {
     }
     const started = await createWordChallenge(cleanWord);
     if (started) {
-      setChallengeModal(false);
+      setChallengeSetupOpen(false);
       setChallengeWord('');
       setChallengeError('');
     }
@@ -679,7 +679,13 @@ export default function GameScreen() {
             <IconMark name="chat" color={palette.text} />
             {hasUnreadChat && <View style={styles.chatBadge}><Text style={styles.chatBadgeText}>{Math.min(chatMessages.length, 9)}</Text></View>}
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.challengeAction, themed.iconBtn]} onPress={() => setChallengeModal(true)}>
+          <TouchableOpacity
+            style={[styles.challengeAction, themed.iconBtn]}
+            onPress={() => {
+              setChallengeSetupOpen(true);
+              if (wordChallenge) switchBoard('challenge');
+            }}
+          >
             <Text style={styles.challengeActionText}>Master</Text>
           </TouchableOpacity>
           {canShare && (
@@ -702,16 +708,9 @@ export default function GameScreen() {
 
   const renderWordChallengeProgress = () => {
     if (!roomId || !wordChallenge) return null;
-    const isChooser = wordChallenge.chooser_player_id === playerId;
     return (
       <View style={[styles.challengeProgressPanel, themed.panel]}>
-        <View style={styles.challengeProgressHeader}>
-          <Text style={[styles.challengeTitle, themed.titleText]}>Word Master Challenge</Text>
-          <Text style={[styles.challengeMeta, themed.mutedText]}>
-            {isChooser ? 'You chose the word' : `${wordChallenge.chooser_name} chose this word`}
-          </Text>
-        </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.challengeProgressList}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.challengeProgressList}>
           {wordChallenge.progress.map(item => (
             <View key={item.player_id} style={[styles.challengeChip, item.player_id === playerId && styles.challengeChipMine]}>
               <Text style={styles.challengeChipEmoji}>{item.player_emoji}</Text>
@@ -731,10 +730,45 @@ export default function GameScreen() {
     );
   };
 
+  const renderChallengeWordPrompt = () => (
+    <View style={[styles.challengeSetupCard, themed.panel]}>
+      <Text style={[styles.challengeSetupTitle, themed.titleText]}>Choose the word</Text>
+      <Text style={[styles.challengeSetupText, themed.mutedText]}>
+        {wordChallenge ? `${wordChallenge.chooser_name} chose for you. Choose one back.` : 'Friends will guess this word on their own boards.'}
+      </Text>
+      <TextInput
+        value={challengeWord}
+        onChangeText={(text) => {
+          setChallengeWord(text.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5));
+          setChallengeError('');
+        }}
+        maxLength={5}
+        autoCapitalize="characters"
+        autoCorrect={false}
+        placeholder="CRANE"
+        placeholderTextColor="#64748B"
+        style={styles.challengeInput}
+      />
+      {!!challengeError && <Text style={styles.fieldError}>{challengeError}</Text>}
+      <TouchableOpacity style={[styles.primaryBtn, styles.challengeStartBtn, challengeWord.length !== 5 && styles.disabledBtn]} disabled={challengeWord.length !== 5} onPress={startWordMasterChallenge}>
+        <Text style={styles.primaryText}>Start</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   const renderBoard = () => (
     <View style={styles.boardShell}>
       <View style={styles.toastSlot}>{toast ? <ToastBanner message={toast.message} type={toast.type} /> : null}</View>
-      {!sessionId ? (
+      {roomId && challengeSetupOpen && (!wordChallenge || (roomPlayers.length === 2 && wordChallenge.chooser_player_id !== playerId)) ? (
+        <View style={styles.challengeCenter}>{renderChallengeWordPrompt()}</View>
+      ) : activeBoard === 'challenge' && wordChallenge && !sessionId ? (
+        <View style={styles.challengeCenter}>
+          {renderWordChallengeProgress()}
+          <Text style={[styles.challengeSetupText, themed.mutedText]}>
+            {roomPlayers.length === 2 ? 'Waiting for your friend to choose your word.' : 'You are the chooser. Track everyone here.'}
+          </Text>
+        </View>
+      ) : !sessionId ? (
         <View style={styles.boardLoading}>
           <ActivityIndicator size="small" color="#16C75A" />
           <Text style={[styles.boardLoadingText, themed.mutedText]}>Preparing puzzle...</Text>
@@ -782,7 +816,6 @@ export default function GameScreen() {
         </View>
       )}
       {shareFromMe && <View style={styles.prompt}><Text style={styles.promptText}>Waiting for a friend to accept your board.</Text></View>}
-      {activeBoard === 'challenge' && renderWordChallengeProgress()}
       <View
         style={styles.gridWrap}
         onLayout={(event) => {
@@ -796,17 +829,20 @@ export default function GameScreen() {
             <Text style={styles.liveCursorText}>{typingPlayerName}</Text>
           </Animated.View>
         )}
-        <WordGrid
-          guesses={guesses}
-          results={results}
-          currentGuess={currentGuess}
-          wordLength={wordLength}
-          invalidShake={invalidShake}
-          lastSubmittedRow={lastSubmittedRow}
-          maxGuesses={maxGuesses}
-          maxWidth={gridSize.width}
-          maxHeight={gridSize.height}
-        />
+        <View style={styles.challengeBoardRow}>
+          <WordGrid
+            guesses={guesses}
+            results={results}
+            currentGuess={currentGuess}
+            wordLength={wordLength}
+            invalidShake={invalidShake}
+            lastSubmittedRow={lastSubmittedRow}
+            maxGuesses={maxGuesses}
+            maxWidth={activeBoard === 'challenge' && wordChallenge ? Math.max(gridSize.width - 86, 180) : gridSize.width}
+            maxHeight={gridSize.height}
+          />
+          {activeBoard === 'challenge' && renderWordChallengeProgress()}
+        </View>
       </View>
       <Keyboard onKeyPress={handleLetterPress} onEnter={handleSubmitPress} onDelete={handleDeletePress} letterStates={letterStates} />
       {roomId && <Text style={styles.typingLine}>{typingPlayerName ? `${typingPlayerName} is typing...` : activeBoard === 'challenge' ? 'Word Master board' : activeBoard === 'shared' ? 'Shared board ready' : 'Your private board'}</Text>}
@@ -1109,37 +1145,6 @@ export default function GameScreen() {
         </View>
       </Modal>
 
-      <Modal visible={challengeModal} transparent animationType="slide" onRequestClose={() => setChallengeModal(false)}>
-        <TouchableWithoutFeedback onPress={() => setChallengeModal(false)}><View style={styles.modalBackdrop} /></TouchableWithoutFeedback>
-        <View style={styles.sheet}>
-          <View style={styles.sheetHeader}>
-            <View>
-              <Text style={styles.sheetTitle}>Word Master Challenge</Text>
-              <Text style={styles.helpText}>Choose one official answer word for friends to solve.</Text>
-            </View>
-            <TouchableOpacity style={styles.closeIconBtn} onPress={() => setChallengeModal(false)}><IconMark name="x" color={palette.text} /></TouchableOpacity>
-          </View>
-          <TextInput
-            value={challengeWord}
-            onChangeText={(text) => {
-              setChallengeWord(text.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5));
-              setChallengeError('');
-            }}
-            maxLength={5}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            placeholder="CRANE"
-            placeholderTextColor="#64748B"
-            style={styles.challengeInput}
-          />
-          {!!challengeError && <Text style={styles.fieldError}>{challengeError}</Text>}
-          <Text style={styles.challengeHint}>Friends get your word. You get a private server word so everyone can play in the same round.</Text>
-          <TouchableOpacity style={[styles.primaryBtn, challengeWord.length !== 5 && styles.disabledBtn]} disabled={challengeWord.length !== 5} onPress={startWordMasterChallenge}>
-            <Text style={styles.primaryText}>Start Challenge</Text>
-          </TouchableOpacity>
-        </View>
-      </Modal>
-
       <Modal visible={friendsModal} transparent animationType="slide" onRequestClose={() => setFriendsModal(false)}>
         <TouchableWithoutFeedback onPress={() => setFriendsModal(false)}><View style={styles.modalBackdrop} /></TouchableWithoutFeedback>
         <View style={styles.sheet}>
@@ -1228,6 +1233,9 @@ export default function GameScreen() {
                     <TouchableOpacity style={styles.friendMenuBtn} onPress={() => { setOpenFriendMenuId(null); openPlayerProfile(friend); }}><Text style={styles.friendMenuText}>Stats</Text></TouchableOpacity>
                     <TouchableOpacity disabled={!friend.online || !(roomId || sessionId) || pendingInviteUserId === friend.user_id} style={[styles.friendMenuBtn, (!friend.online || !(roomId || sessionId) || pendingInviteUserId === friend.user_id) && styles.disabledBtn]} onPress={() => sendInviteToFriend(friend.user_id)}>
                       <Text style={styles.friendMenuText}>{pendingInviteUserId === friend.user_id ? 'Pending' : 'Invite'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity disabled={!friend.online || !(roomId || sessionId) || pendingInviteUserId === friend.user_id} style={[styles.friendMenuBtn, (!friend.online || !(roomId || sessionId) || pendingInviteUserId === friend.user_id) && styles.disabledBtn]} onPress={() => sendInviteToFriend(friend.user_id)}>
+                      <Text style={styles.friendMenuText}>Request Join</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.friendMenuBtn, styles.friendRemoveBtn]} onPress={() => { setOpenFriendMenuId(null); removeFriend(friend.user_id); }}><Text style={styles.friendRemoveText}>Remove</Text></TouchableOpacity>
                   </View>
@@ -1396,10 +1404,15 @@ export default function GameScreen() {
                   <View style={styles.profileActions}>
                     {isFriend(publicProfile.player.user_id) ? (
                       <>
-                        <TouchableOpacity disabled={!selectedProfileFriend?.online || !(roomId || sessionId) || pendingInviteUserId === publicProfile.player.user_id} style={[styles.inlineAction, (!selectedProfileFriend?.online || !(roomId || sessionId) || pendingInviteUserId === publicProfile.player.user_id) && styles.disabledBtn]} onPress={() => sendInviteToFriend(publicProfile.player.user_id)}>
-                          <Text style={styles.inlineActionText}>{pendingInviteUserId === publicProfile.player.user_id ? 'Pending Invite' : 'Invite / Request Board'}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.declineBtn} onPress={() => removeFriend(publicProfile.player.user_id)}><Text style={styles.declineText}>Remove Friend</Text></TouchableOpacity>
+                        <View style={styles.profileActionRow}>
+                          <TouchableOpacity disabled={!selectedProfileFriend?.online || !(roomId || sessionId) || pendingInviteUserId === publicProfile.player.user_id} style={[styles.inlineAction, (!selectedProfileFriend?.online || !(roomId || sessionId) || pendingInviteUserId === publicProfile.player.user_id) && styles.disabledBtn]} onPress={() => sendInviteToFriend(publicProfile.player.user_id)}>
+                            <Text style={styles.inlineActionText}>{pendingInviteUserId === publicProfile.player.user_id ? 'Pending' : 'Invite'}</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity disabled={!selectedProfileFriend?.online || !(roomId || sessionId) || pendingInviteUserId === publicProfile.player.user_id} style={[styles.inlineAction, (!selectedProfileFriend?.online || !(roomId || sessionId) || pendingInviteUserId === publicProfile.player.user_id) && styles.disabledBtn]} onPress={() => sendInviteToFriend(publicProfile.player.user_id)}>
+                            <Text style={styles.inlineActionText}>Request Join</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <TouchableOpacity style={[styles.declineBtn, styles.profileSmallDanger]} onPress={() => removeFriend(publicProfile.player.user_id)}><Text style={styles.declineText}>Remove</Text></TouchableOpacity>
                       </>
                     ) : (
                       <TouchableOpacity disabled={hasOutgoingFriendRequest(publicProfile.player.user_id)} style={[styles.primaryBtn, hasOutgoingFriendRequest(publicProfile.player.user_id) && styles.disabledBtn]} onPress={() => sendFriendRequest(publicProfile.player.user_id)}>
@@ -1921,8 +1934,7 @@ const styles = StyleSheet.create({
   outlineText: { color: '#F8FAFC', fontSize: 13, fontWeight: '900', textTransform: 'uppercase' },
   inputLabel: { color: '#D1D5DB', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 },
   input: { minHeight: 52, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', color: '#F8FAFC', paddingHorizontal: 14, fontSize: 15, fontWeight: '800' },
-  challengeInput: { minHeight: 58, borderRadius: 16, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#10243A', color: '#F8FAFC', paddingHorizontal: 16, fontSize: 24, fontWeight: '900', letterSpacing: 7, textAlign: 'center', marginTop: 8 },
-  challengeHint: { color: '#9CA3AF', fontSize: 12, lineHeight: 18, fontWeight: '800', marginVertical: 10 },
+  challengeInput: { minHeight: 54, borderRadius: 15, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#10243A', color: '#F8FAFC', paddingHorizontal: 16, fontSize: 24, fontWeight: '900', letterSpacing: 7, textAlign: 'center', marginTop: 8 },
   inputError: { borderColor: '#EF4444' },
   profileDisplay: { minHeight: 58, borderRadius: 15, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   profileDisplayEmoji: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1F2937', textAlign: 'center', textAlignVertical: 'center', fontSize: 20, overflow: 'hidden' },
@@ -2006,21 +2018,24 @@ const styles = StyleSheet.create({
   segmentActive: { backgroundColor: '#16C75A' },
   segmentText: { color: '#9CA3AF', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
   segmentTextActive: { color: '#fff' },
-  challengeProgressPanel: { width: '100%', maxWidth: 520, borderRadius: 15, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', padding: 8, marginBottom: 6, gap: 6 },
-  challengeProgressHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
-  challengeTitle: { color: '#F8FAFC', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
-  challengeMeta: { color: '#9CA3AF', fontSize: 10, fontWeight: '800' },
-  challengeProgressList: { gap: 8, paddingRight: 2 },
-  challengeChip: { minWidth: 138, maxWidth: 156, minHeight: 48, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#0B1220', paddingHorizontal: 8, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  challengeProgressPanel: { width: 74, alignSelf: 'stretch', maxHeight: '100%', borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', padding: 5 },
+  challengeProgressList: { gap: 6, alignItems: 'center' },
+  challengeChip: { width: 62, minHeight: 70, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#0B1220', padding: 5, alignItems: 'center', gap: 4 },
   challengeChipMine: { borderColor: '#16C75A', backgroundColor: '#08251A' },
-  challengeChipEmoji: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#1F2937', textAlign: 'center', textAlignVertical: 'center', fontSize: 16, overflow: 'hidden' },
-  challengeChipBody: { flex: 1, minWidth: 0 },
-  challengeChipName: { color: '#F8FAFC', fontSize: 11, fontWeight: '900' },
-  challengeChipMeta: { color: '#93C5FD', fontSize: 10, fontWeight: '900', marginTop: 2 },
-  challengeMiniGrid: { width: 18, gap: 2 },
+  challengeChipEmoji: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#1F2937', textAlign: 'center', textAlignVertical: 'center', fontSize: 16, overflow: 'hidden' },
+  challengeChipBody: { width: '100%', minWidth: 0, alignItems: 'center' },
+  challengeChipName: { color: '#F8FAFC', fontSize: 9, fontWeight: '900', maxWidth: 50 },
+  challengeChipMeta: { color: '#93C5FD', fontSize: 9, fontWeight: '900', marginTop: 1 },
+  challengeMiniGrid: { width: 36, gap: 2 },
   challengeMiniRow: { height: 3, borderRadius: 99, backgroundColor: '#243244' },
   challengeMiniRowFilled: { backgroundColor: '#64748B' },
   challengeMiniRowWon: { backgroundColor: '#16C75A' },
+  challengeBoardRow: { flex: 1, width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 0 },
+  challengeCenter: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  challengeSetupCard: { width: '100%', maxWidth: 340, borderRadius: 18, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#111827', padding: 16, alignItems: 'stretch', gap: 8 },
+  challengeSetupTitle: { color: '#F8FAFC', fontSize: 17, fontWeight: '900', textAlign: 'center' },
+  challengeSetupText: { color: '#9CA3AF', fontSize: 12, lineHeight: 18, fontWeight: '800', textAlign: 'center' },
+  challengeStartBtn: { minHeight: 44, marginTop: 2 },
   gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 150, position: 'relative' },
   liveCursor: { position: 'absolute', right: 8, top: 8, zIndex: 3, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', paddingHorizontal: 10, paddingVertical: 6 },
   liveCursorEmoji: { fontSize: 15 },
@@ -2041,13 +2056,14 @@ const styles = StyleSheet.create({
   socialInfo: { flex: 1, minWidth: 0 },
   socialName: { color: '#F8FAFC', fontSize: 13, fontWeight: '900' },
   socialMeta: { color: '#9CA3AF', fontSize: 11, fontWeight: '800', marginTop: 2, textTransform: 'capitalize' },
-  profileActions: { gap: 8, marginBottom: 10 },
+  profileActions: { gap: 6, marginBottom: 8 },
+  profileActionRow: { flexDirection: 'row', gap: 6 },
   friendRowWrap: { position: 'relative', zIndex: 1 },
   friendRowWrapOpen: { zIndex: 30 },
   friendDotsBtn: { width: 36, height: 36, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', alignItems: 'center', justifyContent: 'center' },
-  friendMenu: { position: 'absolute', right: 0, top: 42, width: 164, borderRadius: 14, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#0F172A', padding: 6, gap: 6, shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 12 },
-  friendMenuBtn: { minHeight: 34, borderRadius: 10, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
-  friendMenuText: { color: '#93C5FD', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+  friendMenu: { position: 'absolute', right: 0, top: 42, width: 150, borderRadius: 14, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#0F172A', padding: 5, gap: 5, shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 12 },
+  friendMenuBtn: { minHeight: 30, borderRadius: 9, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 7 },
+  friendMenuText: { color: '#93C5FD', fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
   friendRemoveBtn: { backgroundColor: '#2A1115', borderColor: '#7F1D1D' },
   friendRemoveText: { color: '#FCA5A5', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
   onlineDotActive: { backgroundColor: '#16C75A' },
@@ -2058,8 +2074,9 @@ const styles = StyleSheet.create({
   ghostBtn: { minHeight: 44, borderRadius: 14, borderWidth: 1, borderColor: '#283447', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
   btnText: { color: '#fff', fontWeight: '900', fontSize: 12 },
   ghostText: { color: '#F8FAFC', fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },
-  inlineAction: { marginTop: 8, minHeight: 40, borderRadius: 13, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
-  inlineActionText: { color: '#60A5FA', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  inlineAction: { flex: 1, minHeight: 34, borderRadius: 11, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' },
+  inlineActionText: { color: '#60A5FA', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+  profileSmallDanger: { minHeight: 34, alignItems: 'center', justifyContent: 'center' },
   typingLine: { color: '#9CA3AF', fontSize: 11, fontWeight: '800', minHeight: 16, marginTop: 3 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)' },
   sheet: { backgroundColor: '#151C27', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, borderWidth: 1, borderColor: '#283447', gap: 12 },

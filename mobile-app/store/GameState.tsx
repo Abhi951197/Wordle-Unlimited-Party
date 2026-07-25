@@ -1237,6 +1237,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setChatMessages(data.chat_messages ?? []);
     setTypingPlayerName(data.typing_player_id === currentPlayerId ? null : data.typing_player_name ?? null);
     setTypingPlayerEmoji(data.typing_player_id === currentPlayerId ? null : data.typing_player_emoji ?? null);
+    if (boardMode === 'challenge' && !active) {
+      applyBoard(null);
+      return;
+    }
     applyBoard(active ?? {
       session_id: data.session_id,
       difficulty: data.difficulty,
