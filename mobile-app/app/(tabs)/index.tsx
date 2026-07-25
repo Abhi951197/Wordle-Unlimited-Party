@@ -88,13 +88,13 @@ const ToastBanner: React.FC<{ message: string; type: 'error' | 'warning' | 'info
 
 export default function GameScreen() {
   const {
-    startGame, startDailyGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, changeRoomDifficulty,
+    startGame, startDailyGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, createWordChallenge, changeRoomDifficulty,
     registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile, leaderboardProfile,
     friendsState, pendingPartyInvite, fetchFriends, searchPlayers, sendFriendRequest, respondFriendRequest, removeFriend, inviteFriendToRoom, respondPartyInvite, clearPendingPartyInvite,
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
     sessionId, difficulty, roomId, playerId, playerEmoji, roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard,
-    shareRequest, chatMessages, sendChatMessage, stats, invalidShake, lastSubmittedRow, answer, answerInfo, maxGuesses, toast, dailyDate, dailyStreak,
+    wordChallenge, shareRequest, chatMessages, sendChatMessage, stats, invalidShake, lastSubmittedRow, answer, answerInfo, maxGuesses, toast, dailyDate, dailyStreak,
     getHint, hints, hintsUsed,
   } = useGameState();
 
@@ -134,6 +134,9 @@ export default function GameScreen() {
   const [usernameStatus, setUsernameStatus] = useState('');
   const [seenChatId, setSeenChatId] = useState<string | null>(null);
   const [chatPopupVisible, setChatPopupVisible] = useState(false);
+  const [challengeModal, setChallengeModal] = useState(false);
+  const [challengeWord, setChallengeWord] = useState('');
+  const [challengeError, setChallengeError] = useState('');
   const [roomName, setRoomName] = useState('');
   const [selectedEmoji, setSelectedEmoji] = useState('🙂');
   const [nameError, setNameError] = useState('');
@@ -581,6 +584,20 @@ export default function GameScreen() {
     }
   };
 
+  const startWordMasterChallenge = async () => {
+    const cleanWord = challengeWord.trim().toUpperCase();
+    if (cleanWord.length !== 5 || !/^[A-Z]+$/.test(cleanWord)) {
+      setChallengeError('Enter a valid five-letter word.');
+      return;
+    }
+    const started = await createWordChallenge(cleanWord);
+    if (started) {
+      setChallengeModal(false);
+      setChallengeWord('');
+      setChallengeError('');
+    }
+  };
+
   const switchBoard = (board: ActiveBoard) => {
     if (activeBoard !== board) setActiveBoard(board);
   };
@@ -662,6 +679,9 @@ export default function GameScreen() {
             <IconMark name="chat" color={palette.text} />
             {hasUnreadChat && <View style={styles.chatBadge}><Text style={styles.chatBadgeText}>{Math.min(chatMessages.length, 9)}</Text></View>}
           </TouchableOpacity>
+          <TouchableOpacity style={[styles.challengeAction, themed.iconBtn]} onPress={() => setChallengeModal(true)}>
+            <Text style={styles.challengeActionText}>Master</Text>
+          </TouchableOpacity>
           {canShare && (
             <TouchableOpacity style={[styles.shareBoardAction, themed.blueAction]} onPress={requestShareBoard}>
               <IconMark name="share" color="#fff" />
@@ -676,6 +696,37 @@ export default function GameScreen() {
               </Text>
           </TouchableOpacity>
         )}
+      </View>
+    );
+  };
+
+  const renderWordChallengeProgress = () => {
+    if (!roomId || !wordChallenge) return null;
+    const isChooser = wordChallenge.chooser_player_id === playerId;
+    return (
+      <View style={[styles.challengeProgressPanel, themed.panel]}>
+        <View style={styles.challengeProgressHeader}>
+          <Text style={[styles.challengeTitle, themed.titleText]}>Word Master Challenge</Text>
+          <Text style={[styles.challengeMeta, themed.mutedText]}>
+            {isChooser ? 'You chose the word' : `${wordChallenge.chooser_name} chose this word`}
+          </Text>
+        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.challengeProgressList}>
+          {wordChallenge.progress.map(item => (
+            <View key={item.player_id} style={[styles.challengeChip, item.player_id === playerId && styles.challengeChipMine]}>
+              <Text style={styles.challengeChipEmoji}>{item.player_emoji}</Text>
+              <View style={styles.challengeChipBody}>
+                <Text style={styles.challengeChipName} numberOfLines={1}>{item.player_name}</Text>
+                <Text style={styles.challengeChipMeta}>{item.won ? `Solved in ${item.guesses}` : item.game_over ? 'Finished' : `${item.guesses}/${maxGuesses}`}</Text>
+              </View>
+              <View style={styles.challengeMiniGrid}>
+                {Array.from({ length: maxGuesses }).map((_, index) => (
+                  <View key={index} style={[styles.challengeMiniRow, index < item.guesses && styles.challengeMiniRowFilled, item.won && index === item.guesses - 1 && styles.challengeMiniRowWon]} />
+                ))}
+              </View>
+            </View>
+          ))}
+        </ScrollView>
       </View>
     );
   };
@@ -714,6 +765,11 @@ export default function GameScreen() {
           <TouchableOpacity style={[styles.segmentBtn, activeBoard === 'individual' && styles.segmentActive]} onPress={() => switchBoard('individual')}>
             <Text style={[styles.segmentText, activeBoard === 'individual' && styles.segmentTextActive]}>Solo Board</Text>
           </TouchableOpacity>
+          {!!wordChallenge && (
+            <TouchableOpacity style={[styles.segmentBtn, activeBoard === 'challenge' && styles.segmentActive]} onPress={() => switchBoard('challenge')}>
+              <Text style={[styles.segmentText, activeBoard === 'challenge' && styles.segmentTextActive]}>Word Master</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
       {hasShareForMe && (
@@ -726,6 +782,7 @@ export default function GameScreen() {
         </View>
       )}
       {shareFromMe && <View style={styles.prompt}><Text style={styles.promptText}>Waiting for a friend to accept your board.</Text></View>}
+      {activeBoard === 'challenge' && renderWordChallengeProgress()}
       <View
         style={styles.gridWrap}
         onLayout={(event) => {
@@ -752,7 +809,7 @@ export default function GameScreen() {
         />
       </View>
       <Keyboard onKeyPress={handleLetterPress} onEnter={handleSubmitPress} onDelete={handleDeletePress} letterStates={letterStates} />
-      {roomId && <Text style={styles.typingLine}>{typingPlayerName ? `${typingPlayerName} is typing...` : activeBoard === 'shared' ? 'Shared board ready' : 'Your private board'}</Text>}
+      {roomId && <Text style={styles.typingLine}>{typingPlayerName ? `${typingPlayerName} is typing...` : activeBoard === 'challenge' ? 'Word Master board' : activeBoard === 'shared' ? 'Shared board ready' : 'Your private board'}</Text>}
         </>
       )}
     </View>
@@ -833,6 +890,15 @@ export default function GameScreen() {
                       <Text style={styles.homeModeTitle}>Party Mode</Text>
                       <Text style={styles.homeModeDesc}>Create or join a room with optional voice and chat.</Text>
                       <Text style={[styles.homeModeCta, styles.homePartyCta]}>Create / Join</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.homeModeCard, styles.homeChallengeCard]} onPress={() => chooseMode('party')} activeOpacity={0.86}>
+                      <View style={styles.homeModeTop}>
+                        <View style={[styles.homeModeIcon, styles.homeChallengeIcon]}><Text style={styles.homeModeIconText}>W</Text></View>
+                        <Text style={styles.homeModeArrow}>â†’</Text>
+                      </View>
+                      <Text style={styles.homeModeTitle}>Word Master Challenge</Text>
+                      <Text style={styles.homeModeDesc}>Pick a valid word and watch friends race through their boards.</Text>
+                      <Text style={[styles.homeModeCta, styles.homeChallengeCta]}>Start in Party</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -1040,6 +1106,37 @@ export default function GameScreen() {
             ))}
           </View>
           <TouchableOpacity style={styles.dangerBtn} onPress={() => { leaveRoom(); setRoomModal(false); setView('mode'); }}><Text style={styles.dangerText}>Leave Room</Text></TouchableOpacity>
+        </View>
+      </Modal>
+
+      <Modal visible={challengeModal} transparent animationType="slide" onRequestClose={() => setChallengeModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setChallengeModal(false)}><View style={styles.modalBackdrop} /></TouchableWithoutFeedback>
+        <View style={styles.sheet}>
+          <View style={styles.sheetHeader}>
+            <View>
+              <Text style={styles.sheetTitle}>Word Master Challenge</Text>
+              <Text style={styles.helpText}>Choose one official answer word for friends to solve.</Text>
+            </View>
+            <TouchableOpacity style={styles.closeIconBtn} onPress={() => setChallengeModal(false)}><IconMark name="x" color={palette.text} /></TouchableOpacity>
+          </View>
+          <TextInput
+            value={challengeWord}
+            onChangeText={(text) => {
+              setChallengeWord(text.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5));
+              setChallengeError('');
+            }}
+            maxLength={5}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            placeholder="CRANE"
+            placeholderTextColor="#64748B"
+            style={styles.challengeInput}
+          />
+          {!!challengeError && <Text style={styles.fieldError}>{challengeError}</Text>}
+          <Text style={styles.challengeHint}>Friends get your word. You get a private server word so everyone can play in the same round.</Text>
+          <TouchableOpacity style={[styles.primaryBtn, challengeWord.length !== 5 && styles.disabledBtn]} disabled={challengeWord.length !== 5} onPress={startWordMasterChallenge}>
+            <Text style={styles.primaryText}>Start Challenge</Text>
+          </TouchableOpacity>
         </View>
       </Modal>
 
@@ -1783,10 +1880,12 @@ const styles = StyleSheet.create({
   homeSoloCard: { borderColor: '#16C75A', backgroundColor: '#082B1A' },
   homeDailyCard: { borderColor: '#FACC15', backgroundColor: '#2A2108' },
   homePartyCard: { borderColor: '#8B5CF6', backgroundColor: '#1D123A' },
+  homeChallengeCard: { borderColor: '#38BDF8', backgroundColor: '#08283A' },
   homeModeTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   homeModeIcon: { width: 52, height: 52, borderRadius: 17, backgroundColor: '#16C75A', alignItems: 'center', justifyContent: 'center' },
   homeDailyIcon: { backgroundColor: '#FACC15' },
   homePartyIcon: { backgroundColor: '#7C3AED' },
+  homeChallengeIcon: { backgroundColor: '#0284C7' },
   homeModeIconText: { color: '#FFFFFF', fontSize: 23, fontWeight: '900' },
   homeModeArrow: { color: '#FFFFFF', fontSize: 24, fontWeight: '900' },
   homeModeTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: '900' },
@@ -1794,6 +1893,7 @@ const styles = StyleSheet.create({
   homeModeCta: { alignSelf: 'flex-start', marginTop: 4, color: '#FFFFFF', backgroundColor: '#16A34A', borderRadius: 13, overflow: 'hidden', paddingHorizontal: 14, paddingVertical: 10, fontSize: 13, fontWeight: '900' },
   homeDailyCta: { backgroundColor: '#FACC15', color: '#111827' },
   homePartyCta: { backgroundColor: '#7C3AED' },
+  homeChallengeCta: { backgroundColor: '#0284C7' },
   homeArtCard: { flex: 0.8, minHeight: 360, borderRadius: 24, borderWidth: 1, borderColor: '#2B2254', backgroundColor: '#0A1020', overflow: 'hidden', justifyContent: 'flex-end' },
   homeArtImage: { position: 'absolute', width: '120%', height: '120%', opacity: 0.86 },
   homeArtBadge: { alignSelf: 'flex-start', margin: 16, borderRadius: 999, backgroundColor: 'rgba(5,7,17,0.72)', paddingHorizontal: 14, paddingVertical: 9 },
@@ -1821,6 +1921,8 @@ const styles = StyleSheet.create({
   outlineText: { color: '#F8FAFC', fontSize: 13, fontWeight: '900', textTransform: 'uppercase' },
   inputLabel: { color: '#D1D5DB', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 },
   input: { minHeight: 52, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', color: '#F8FAFC', paddingHorizontal: 14, fontSize: 15, fontWeight: '800' },
+  challengeInput: { minHeight: 58, borderRadius: 16, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#10243A', color: '#F8FAFC', paddingHorizontal: 16, fontSize: 24, fontWeight: '900', letterSpacing: 7, textAlign: 'center', marginTop: 8 },
+  challengeHint: { color: '#9CA3AF', fontSize: 12, lineHeight: 18, fontWeight: '800', marginVertical: 10 },
   inputError: { borderColor: '#EF4444' },
   profileDisplay: { minHeight: 58, borderRadius: 15, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   profileDisplayEmoji: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1F2937', textAlign: 'center', textAlignVertical: 'center', fontSize: 20, overflow: 'hidden' },
@@ -1857,6 +1959,8 @@ const styles = StyleSheet.create({
   partyActionStrip: { width: '100%', minHeight: 58, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 5, overflow: 'hidden' },
   partyVoiceWrap: { flex: 1, minWidth: 0, alignItems: 'flex-start' },
   actionIconBtn: { width: 38, height: 38, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  challengeAction: { minHeight: 38, borderRadius: 13, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#10243A', paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  challengeActionText: { color: '#BFDBFE', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
   chatPreviewPopup: { position: 'absolute', left: 8, right: 8, top: 62, minHeight: 38, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', justifyContent: 'center', paddingHorizontal: 10, zIndex: 8 },
   chatPreviewText: { color: '#F8FAFC', fontSize: 11, fontWeight: '800' },
   shareBoardAction: { minHeight: 38, maxWidth: 78, borderRadius: 13, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#2563EB', paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0 },
@@ -1897,11 +2001,26 @@ const styles = StyleSheet.create({
   hintFullLetterBadge: { borderRadius: 999, backgroundColor: '#14331F', borderWidth: 1, borderColor: '#16C75A', paddingHorizontal: 10, paddingVertical: 4 },
   hintFullLetterBadgeText: { color: '#BBF7D0', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
   hintEmptyText: { color: '#9CA3AF', fontSize: 13, fontWeight: '800', textAlign: 'center', paddingVertical: 8 },
-  segment: { flexDirection: 'row', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 14, padding: 3, marginBottom: 8, zIndex: 4 },
-  segmentBtn: { paddingVertical: 7, paddingHorizontal: 18, borderRadius: 11 },
+  segment: { width: '100%', maxWidth: 420, flexDirection: 'row', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 14, padding: 3, marginBottom: 8, zIndex: 4 },
+  segmentBtn: { flex: 1, paddingVertical: 7, paddingHorizontal: 6, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   segmentActive: { backgroundColor: '#16C75A' },
   segmentText: { color: '#9CA3AF', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
   segmentTextActive: { color: '#fff' },
+  challengeProgressPanel: { width: '100%', maxWidth: 520, borderRadius: 15, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', padding: 8, marginBottom: 6, gap: 6 },
+  challengeProgressHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+  challengeTitle: { color: '#F8FAFC', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  challengeMeta: { color: '#9CA3AF', fontSize: 10, fontWeight: '800' },
+  challengeProgressList: { gap: 8, paddingRight: 2 },
+  challengeChip: { minWidth: 138, maxWidth: 156, minHeight: 48, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#0B1220', paddingHorizontal: 8, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  challengeChipMine: { borderColor: '#16C75A', backgroundColor: '#08251A' },
+  challengeChipEmoji: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#1F2937', textAlign: 'center', textAlignVertical: 'center', fontSize: 16, overflow: 'hidden' },
+  challengeChipBody: { flex: 1, minWidth: 0 },
+  challengeChipName: { color: '#F8FAFC', fontSize: 11, fontWeight: '900' },
+  challengeChipMeta: { color: '#93C5FD', fontSize: 10, fontWeight: '900', marginTop: 2 },
+  challengeMiniGrid: { width: 18, gap: 2 },
+  challengeMiniRow: { height: 3, borderRadius: 99, backgroundColor: '#243244' },
+  challengeMiniRowFilled: { backgroundColor: '#64748B' },
+  challengeMiniRowWon: { backgroundColor: '#16C75A' },
   gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 150, position: 'relative' },
   liveCursor: { position: 'absolute', right: 8, top: 8, zIndex: 3, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', paddingHorizontal: 10, paddingVertical: 6 },
   liveCursorEmoji: { fontSize: 15 },

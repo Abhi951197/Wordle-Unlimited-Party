@@ -124,6 +124,10 @@ class RoomInputRequest(BaseModel):
 class RoomLeaveRequest(BaseModel):
     player_id: str
 
+class WordChallengeCreateRequest(BaseModel):
+    player_id: str
+    word: str
+
 class RoomDifficultyRequest(BaseModel):
     player_id: str
     difficulty: str
@@ -188,6 +192,25 @@ class ShareRequestState(BaseModel):
     session_id: str
     created_at: str
 
+class WordChallengeProgress(BaseModel):
+    player_id: str
+    player_name: str
+    player_emoji: str = "ðŸ™‚"
+    guesses: int = 0
+    won: bool = False
+    game_over: bool = False
+    latest_guess: str | None = None
+    latest_result: list[str] | None = None
+
+class WordChallengeState(BaseModel):
+    challenge_id: str
+    chooser_player_id: str
+    chooser_name: str
+    chooser_emoji: str = "ðŸ™‚"
+    status: str = "active"
+    created_at: str
+    progress: list[WordChallengeProgress] = []
+
 class RoomStateResponse(BaseModel):
     room_id: str
     session_id: str
@@ -209,6 +232,8 @@ class RoomStateResponse(BaseModel):
     active_board: str = "shared"
     shared_board: BoardState | None = None
     individual_board: BoardState | None = None
+    challenge_board: BoardState | None = None
+    word_challenge: WordChallengeState | None = None
     share_request: ShareRequestState | None = None
     chat_messages: list[ChatMessage] = []
     max_players: int = MAX_ROOM_PLAYERS
@@ -680,7 +705,16 @@ def _room_state(room_id: str, player_id: str | None = None) -> RoomStateResponse
     active_board = room["player_active_boards"].get(player_id, "shared") if player_id else "shared"
     shared_session_id = room.get("active_shared_session_id")
     individual_session_id = room["player_sessions"].get(player_id) if player_id else None
+    challenge = room.get("word_challenge") if player_id else None
+    challenge_session_id = (
+        challenge.get("sessions", {}).get(player_id)
+        if challenge and challenge.get("status") == "active"
+        else None
+    )
     active_session_id = (
+        challenge_session_id
+        if active_board == "challenge" and challenge_session_id
+        else
         individual_session_id
         if active_board == "individual" and individual_session_id
         else shared_session_id or individual_session_id
@@ -711,6 +745,8 @@ def _room_state(room_id: str, player_id: str | None = None) -> RoomStateResponse
         active_board=active_board,
         shared_board=_board_state(shared_session_id),
         individual_board=_board_state(individual_session_id),
+        challenge_board=_board_state(challenge_session_id),
+        word_challenge=_challenge_state(room),
         share_request=room.get("share_request"),
         chat_messages=room.get("chat_messages", []),
         max_players=MAX_ROOM_PLAYERS,
@@ -743,6 +779,19 @@ def _remove_room_player(room_id: str, player_id: str) -> dict[str, Any]:
     if share_request.get("from_player_id") == player_id:
         room["share_request"] = None
 
+    challenge = room.get("word_challenge")
+    if challenge:
+        challenge_session_id = challenge.get("sessions", {}).pop(player_id, None)
+        if challenge_session_id:
+            sessions.pop(challenge_session_id, None)
+        if challenge.get("chooser_player_id") == player_id or not challenge.get("sessions"):
+            for session_id in list(challenge.get("sessions", {}).values()):
+                sessions.pop(session_id, None)
+            room["word_challenge"] = None
+            for remaining_player_id, board in list(room.get("player_active_boards", {}).items()):
+                if board == "challenge":
+                    room["player_active_boards"][remaining_player_id] = "shared"
+
     shared_session_id = room.get("active_shared_session_id")
     if shared_session_id in sessions and sessions[shared_session_id].get("typing_player_id") == player_id:
         sessions[shared_session_id]["typing_player_id"] = None
@@ -760,12 +809,50 @@ def _remove_room_player(room_id: str, player_id: str) -> dict[str, Any]:
     _touch_room(room)
     return {"room_id": room_id, "removed": bool(removed_player), "players": list(room["players"].values())}
 
+def _challenge_state(room: dict[str, Any]) -> WordChallengeState | None:
+    challenge = room.get("word_challenge")
+    if not challenge or challenge.get("status") != "active":
+        return None
+
+    progress: list[WordChallengeProgress] = []
+    sessions_by_player = challenge.get("sessions", {})
+    for player_id, player in room.get("players", {}).items():
+        session_id = sessions_by_player.get(player_id)
+        session = sessions.get(session_id) if session_id else None
+        guesses = session.get("guesses", []) if session else []
+        results = session.get("results", []) if session else []
+        progress.append(WordChallengeProgress(
+            player_id=player_id,
+            player_name=player.get("player_name", "Player"),
+            player_emoji=player.get("player_emoji", "ðŸ™‚"),
+            guesses=len(guesses),
+            won=bool(session.get("won")) if session else False,
+            game_over=bool(session.get("game_over")) if session else False,
+            latest_guess=guesses[-1] if guesses else None,
+            latest_result=results[-1] if results else None,
+        ))
+
+    return WordChallengeState(
+        challenge_id=challenge["challenge_id"],
+        chooser_player_id=challenge["chooser_player_id"],
+        chooser_name=challenge["chooser_name"],
+        chooser_emoji=challenge.get("chooser_emoji", "ðŸ™‚"),
+        status=challenge.get("status", "active"),
+        created_at=challenge["created_at"],
+        progress=progress,
+    )
+
 def _active_session_id(room: dict[str, Any], player_id: str) -> str:
     if player_id not in room["player_sessions"]:
         room["player_sessions"][player_id] = _create_session(room.get("difficulty", "easy"))
         _mark_session_leaderboard_context(room["player_sessions"][player_id], "party", False)
 
     active_board = room["player_active_boards"].get(player_id, "shared")
+    challenge = room.get("word_challenge")
+    if active_board == "challenge" and challenge and challenge.get("status") == "active":
+        session_id = challenge.get("sessions", {}).get(player_id)
+        if session_id:
+            return session_id
     if active_board == "individual":
         return room["player_sessions"][player_id]
     return room["active_shared_session_id"] or room["player_sessions"][player_id]
@@ -904,6 +991,7 @@ def create_room(req: RoomCreateRequest):
         "player_sessions": {player_id: individual_session_id},
         "player_active_boards": {player_id: "shared"},
         "share_request": None,
+        "word_challenge": None,
         "chat_messages": [],
         "created_at": _now_iso(),
         "players": {
@@ -949,6 +1037,7 @@ def create_room_from_session(req: RoomFromSessionRequest):
         "player_sessions": {player_id: individual_session_id},
         "player_active_boards": {player_id: "shared"},
         "share_request": None,
+        "word_challenge": None,
         "chat_messages": [],
         "created_at": _now_iso(),
         "players": {
@@ -983,7 +1072,14 @@ def join_room(room_id: str, req: RoomJoinRequest):
     if player_id not in rooms[room_id]["player_sessions"]:
         rooms[room_id]["player_sessions"][player_id] = _create_session(rooms[room_id].get("difficulty", "easy"))
         _mark_session_leaderboard_context(rooms[room_id]["player_sessions"][player_id], "party", False)
-    rooms[room_id]["player_active_boards"].setdefault(player_id, "shared")
+    active_challenge = rooms[room_id].get("word_challenge")
+    if active_challenge and active_challenge.get("status") == "active" and player_id not in active_challenge.get("sessions", {}):
+        session_id = _create_session(rooms[room_id].get("difficulty", "easy"), active_challenge.get("chosen_word"))
+        _mark_session_leaderboard_context(session_id, "party", False)
+        active_challenge.setdefault("sessions", {})[player_id] = session_id
+        rooms[room_id]["player_active_boards"][player_id] = "challenge"
+    else:
+        rooms[room_id]["player_active_boards"].setdefault(player_id, "shared")
     rooms[room_id]["players"][player_id] = {
         "player_id": player_id,
         "player_name": _clean_player_name(req.player_name),
@@ -1058,6 +1154,11 @@ def create_shared_game(room_id: str, req: PlayerRequest):
     room_id = room_id.strip().upper()
     room = _require_room_player(room_id, req.player_id or "")
     difficulty = room.get("difficulty", "easy")
+    old_challenge = room.get("word_challenge")
+    if old_challenge:
+        for session_id in list(old_challenge.get("sessions", {}).values()):
+            sessions.pop(session_id, None)
+        room["word_challenge"] = None
     room["active_shared_session_id"] = _create_session(difficulty)
     _mark_session_leaderboard_context(room["active_shared_session_id"], "party", True)
     room["share_request"] = None
@@ -1077,12 +1178,54 @@ def create_individual_game(room_id: str, req: PlayerRequest):
     _touch_room(room, req.player_id)
     return _room_state(room_id, req.player_id)
 
+@app.post("/rooms/{room_id}/word-challenge", response_model=RoomStateResponse)
+def create_word_challenge(room_id: str, req: WordChallengeCreateRequest):
+    room_id = room_id.strip().upper()
+    room = _require_room_player(room_id, req.player_id)
+    chosen_word = req.word.strip().upper()
+    if len(chosen_word) != 5 or not chosen_word.isalpha() or chosen_word not in ANSWER_WORDS:
+        raise HTTPException(status_code=422, detail="Choose a valid official answer word")
+
+    old_challenge = room.get("word_challenge")
+    if old_challenge:
+        for session_id in list(old_challenge.get("sessions", {}).values()):
+            sessions.pop(session_id, None)
+
+    difficulty = room.get("difficulty", "easy")
+    chooser = room["players"][req.player_id]
+    challenge_sessions: dict[str, str] = {}
+    for player_id in room["players"]:
+        word = get_word(difficulty) if player_id == req.player_id else chosen_word
+        session_id = _create_session(difficulty, word)
+        _mark_session_leaderboard_context(session_id, "party", False)
+        challenge_sessions[player_id] = session_id
+        room["player_active_boards"][player_id] = "challenge"
+
+    room["word_challenge"] = {
+        "challenge_id": str(uuid.uuid4()),
+        "chooser_player_id": req.player_id,
+        "chooser_name": chooser.get("player_name", "Player"),
+        "chooser_emoji": chooser.get("player_emoji", "ðŸ™‚"),
+        "chosen_word": chosen_word,
+        "sessions": challenge_sessions,
+        "status": "active",
+        "created_at": _now_iso(),
+    }
+    room["share_request"] = None
+    _touch_room(room, req.player_id)
+    return _room_state(room_id, req.player_id)
+
 @app.post("/rooms/{room_id}/difficulty", response_model=RoomStateResponse)
 def change_room_difficulty(room_id: str, req: RoomDifficultyRequest):
     room_id = room_id.strip().upper()
     room = _require_room_player(room_id, req.player_id)
     difficulty = req.difficulty.strip().lower()
     room["difficulty"] = difficulty
+    old_challenge = room.get("word_challenge")
+    if old_challenge:
+        for session_id in list(old_challenge.get("sessions", {}).values()):
+            sessions.pop(session_id, None)
+        room["word_challenge"] = None
     room["active_shared_session_id"] = _create_session(difficulty)
     _mark_session_leaderboard_context(room["active_shared_session_id"], "party", True)
     room["share_request"] = None
@@ -1097,14 +1240,18 @@ def change_room_difficulty(room_id: str, req: RoomDifficultyRequest):
 def set_active_board(room_id: str, req: ActiveBoardRequest):
     room_id = room_id.strip().upper()
     room = _require_room_player(room_id, req.player_id)
-    if req.board not in {"shared", "individual"}:
-        raise HTTPException(status_code=400, detail="Board must be shared or individual")
+    if req.board not in {"shared", "individual", "challenge"}:
+        raise HTTPException(status_code=400, detail="Board must be shared, individual, or challenge")
     if req.board == "shared" and not room.get("active_shared_session_id"):
         room["active_shared_session_id"] = _create_session(room.get("difficulty", "easy"))
         _mark_session_leaderboard_context(room["active_shared_session_id"], "party", True)
     if req.board == "individual" and req.player_id not in room["player_sessions"]:
         room["player_sessions"][req.player_id] = _create_session(room.get("difficulty", "easy"))
         _mark_session_leaderboard_context(room["player_sessions"][req.player_id], "party", False)
+    if req.board == "challenge":
+        challenge = room.get("word_challenge")
+        if not challenge or challenge.get("status") != "active" or req.player_id not in challenge.get("sessions", {}):
+            raise HTTPException(status_code=404, detail="No active word challenge")
     room["player_active_boards"][req.player_id] = req.board
     _touch_room(room, req.player_id)
     return _room_state(room_id, req.player_id)

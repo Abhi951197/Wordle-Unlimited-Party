@@ -98,7 +98,28 @@ export interface ChatMessage {
   created_at: string;
 }
 
-export type ActiveBoard = 'shared' | 'individual';
+export type ActiveBoard = 'shared' | 'individual' | 'challenge';
+
+export interface WordChallengeProgress {
+  player_id: string;
+  player_name: string;
+  player_emoji: string;
+  guesses: number;
+  won: boolean;
+  game_over: boolean;
+  latest_guess?: string | null;
+  latest_result?: string[] | null;
+}
+
+export interface WordChallengeState {
+  challenge_id: string;
+  chooser_player_id: string;
+  chooser_name: string;
+  chooser_emoji: string;
+  status: string;
+  created_at: string;
+  progress: WordChallengeProgress[];
+}
 
 export interface LeaderboardProfile {
   user_id: string;
@@ -239,6 +260,8 @@ interface GameStateContextType {
   activeBoard: ActiveBoard;
   sharedBoard: BoardState | null;
   individualBoard: BoardState | null;
+  challengeBoard: BoardState | null;
+  wordChallenge: WordChallengeState | null;
   shareRequest: ShareRequestState | null;
   chatMessages: ChatMessage[];
   guesses: string[];
@@ -270,6 +293,7 @@ interface GameStateContextType {
   createIndividualGame: () => Promise<void>;
   changeRoomDifficulty: (difficulty: string) => Promise<void>;
   setActiveBoard: (board: ActiveBoard) => Promise<void>;
+  createWordChallenge: (word: string) => Promise<boolean>;
   requestShareBoard: () => Promise<void>;
   respondToShareRequest: (accept: boolean) => Promise<void>;
   sendChatMessage: (text: string) => Promise<boolean>;
@@ -328,6 +352,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [activeBoard, setActiveBoardState] = useState<ActiveBoard>('shared');
   const [sharedBoard, setSharedBoard] = useState<BoardState | null>(null);
   const [individualBoard, setIndividualBoard] = useState<BoardState | null>(null);
+  const [challengeBoard, setChallengeBoard] = useState<BoardState | null>(null);
+  const [wordChallenge, setWordChallenge] = useState<WordChallengeState | null>(null);
   const [shareRequest, setShareRequest] = useState<ShareRequestState | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [guesses, setGuesses] = useState<string[]>([]);
@@ -1174,10 +1200,15 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const applyRoomState = (data: any, currentPlayerId = playerId) => {
-    const boardMode: ActiveBoard = data.active_board === 'individual' ? 'individual' : 'shared';
+    const boardMode: ActiveBoard = data.active_board === 'individual'
+      ? 'individual'
+      : data.active_board === 'challenge'
+        ? 'challenge'
+        : 'shared';
     const nextShared = data.shared_board ?? null;
     const nextIndividual = data.individual_board ?? null;
-    const active = boardMode === 'individual' ? nextIndividual : nextShared;
+    const nextChallenge = data.challenge_board ?? null;
+    const active = boardMode === 'challenge' ? nextChallenge : boardMode === 'individual' ? nextIndividual : nextShared;
     const nextPlayers: RoomPlayer[] = data.players ?? [];
 
     const previousPlayers = roomPlayersRef.current;
@@ -1200,6 +1231,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setActiveBoardState(boardMode);
     setSharedBoard(nextShared);
     setIndividualBoard(nextIndividual);
+    setChallengeBoard(nextChallenge);
+    setWordChallenge(data.word_challenge ?? null);
     setShareRequest(data.share_request ?? null);
     setChatMessages(data.chat_messages ?? []);
     setTypingPlayerName(data.typing_player_id === currentPlayerId ? null : data.typing_player_name ?? null);
@@ -1456,6 +1489,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setActiveBoardState('shared');
     setSharedBoard(null);
     setIndividualBoard(null);
+    setChallengeBoard(null);
+    setWordChallenge(null);
     setShareRequest(null);
     setChatMessages([]);
     if (options.forgetIdentity !== false) AsyncStorage.removeItem(ROOM_STORAGE_KEY);
@@ -1487,6 +1522,31 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const createIndividualGame = async () => {
     await postRoomAction('individual-game', {});
     trackEvent('Individual Game Started', { difficulty });
+  };
+
+  const createWordChallenge = async (word: string) => {
+    if (!roomId || !playerId) return false;
+    try {
+      const res = await fetch(`${API_URL}/rooms/${roomId}/word-challenge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ player_id: playerId, word }),
+      });
+      if (res.status === 422) {
+        showToast('Choose an official answer word', 'error');
+        return false;
+      }
+      if (!res.ok) throw new Error('word-challenge');
+      const data = await res.json();
+      resetBoardState();
+      applyRoomState(data, playerId);
+      showToast('Word Master Challenge started', 'info');
+      trackEvent('Word Challenge Started', { difficulty });
+      return true;
+    } catch {
+      showToast('Could not start challenge', 'error');
+      return false;
+    }
   };
 
   const changeRoomDifficulty = async (nextDifficulty: string) => {
@@ -1797,9 +1857,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   return (
     <GameStateContext.Provider value={{
       difficulty, wordLength, sessionId, roomId, playerId, playerName, playerEmoji, leaderboardProfile, friendsState, pendingPartyInvite,
-      roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard, sharedBoard, individualBoard, shareRequest, chatMessages,
+      roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard, sharedBoard, individualBoard, challengeBoard, wordChallenge, shareRequest, chatMessages,
       guesses, results, currentGuess, gameStatus, letterStates, stats, dailyDate, dailyStreak,
-      startGame, startDailyGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
+      startGame, startDailyGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, createWordChallenge,
       registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile, fetchFriends, searchPlayers,
       sendFriendRequest, respondFriendRequest, removeFriend, inviteFriendToRoom, respondPartyInvite, clearPendingPartyInvite,
       changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, sendChatMessage, addLetter, removeLetter,
