@@ -249,6 +249,7 @@ const STATS_STORAGE_KEY = 'word_unlimited_stats';
 const WEEKLY_STATS_STORAGE_KEY = 'word_weekly_stats';
 const DAILY_STORAGE_KEY = 'word_daily_progress';
 const STATS_IMPORT_PREFIX = 'word_stats_imported_';
+const STATS_IMPORT_BACKEND_SCOPE = API_URL.replace(/[^a-z0-9]/gi, '_').slice(0, 80);
 const ROOM_STORAGE_KEY = 'word_party_room';
 const LEADERBOARD_PROFILE_KEY = 'word_leaderboard_profile';
 
@@ -511,6 +512,18 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const weeklyStats = weekly?.weekKey === weekKey ? normalizeStats(weekly.stats) : null;
       const importKey = [
         STATS_IMPORT_PREFIX,
+        STATS_IMPORT_BACKEND_SCOPE,
+        profile.user_id,
+        localStats.gamesPlayed,
+        localStats.wins,
+        localStats.maxStreak,
+        weekKey,
+        weeklyStats?.gamesPlayed ?? 0,
+        weeklyStats?.wins ?? 0,
+        weeklyStats?.maxStreak ?? 0,
+      ].join('_');
+      const legacyImportKey = [
+        STATS_IMPORT_PREFIX,
         profile.user_id,
         localStats.gamesPlayed,
         localStats.wins,
@@ -533,6 +546,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       });
       if (!res.ok) return;
       await AsyncStorage.setItem(importKey, '1');
+      await AsyncStorage.setItem(legacyImportKey, '1');
       await hydrateStatsFromPublicProfile(profile.user_id);
     } catch {
       // Local leaderboard sync is best-effort.
