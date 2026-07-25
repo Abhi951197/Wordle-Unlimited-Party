@@ -567,6 +567,7 @@ export default function GameScreen() {
 
   const sendInviteToFriend = async (friendUserId: string) => {
     if (pendingInviteUserId === friendUserId) return;
+    setOpenFriendMenuId(null);
     setPendingInviteUserId(friendUserId);
     setPendingInviteStartedAt(Date.now());
     const sent = await inviteFriendToRoom(friendUserId);
@@ -597,14 +598,24 @@ export default function GameScreen() {
   const roomSubtitle = roomId
     ? `${activeMeta.label} - ${roomPlayers.length || 1}/${maxRoomPlayers} players`
     : 'Create or join a room';
+  const selectedProfileFriend = publicProfile
+    ? friendsState?.friends.find(friend => friend.user_id === publicProfile.player.user_id)
+    : null;
 
   const goBack = () => {
     if (view === 'splash') return;
     if (view === 'mode') return;
     else if (view === 'difficulty') setView('mode');
-    else if (view === 'roomCreated') setView('party');
+    else if (view === 'roomCreated') {
+      if (roomId) leaveRoom();
+      setView('party');
+    }
     else if (view === 'solo') setView('difficulty');
     else if (view === 'party' && !roomId) setView('mode');
+    else if (view === 'party' && roomId) {
+      leaveRoom();
+      setView('mode');
+    }
     else setView('mode');
   };
 
@@ -1103,7 +1114,7 @@ export default function GameScreen() {
           <View style={styles.socialSection}>
             <Text style={styles.socialSectionTitle}>Friends List</Text>
             {friendsState?.friends?.length ? friendsState.friends.map((friend: FriendPlayer) => (
-              <View key={friend.user_id}>
+              <View key={friend.user_id} style={[styles.friendRowWrap, openFriendMenuId === friend.user_id && styles.friendRowWrapOpen]}>
                 <View style={styles.socialRow}>
                   <TouchableOpacity onPress={() => openPlayerProfile(friend)}><Text style={styles.socialAvatar}>{friend.emoji}</Text></TouchableOpacity>
                   <TouchableOpacity style={styles.socialInfo} onPress={() => openPlayerProfile(friend)}>
@@ -1117,11 +1128,11 @@ export default function GameScreen() {
                 </View>
                 {openFriendMenuId === friend.user_id && (
                   <View style={styles.friendMenu}>
-                    <TouchableOpacity style={styles.friendMenuBtn} onPress={() => openPlayerProfile(friend)}><Text style={styles.friendMenuText}>Stats</Text></TouchableOpacity>
+                    <TouchableOpacity style={styles.friendMenuBtn} onPress={() => { setOpenFriendMenuId(null); openPlayerProfile(friend); }}><Text style={styles.friendMenuText}>Stats</Text></TouchableOpacity>
                     <TouchableOpacity disabled={!friend.online || !(roomId || sessionId) || pendingInviteUserId === friend.user_id} style={[styles.friendMenuBtn, (!friend.online || !(roomId || sessionId) || pendingInviteUserId === friend.user_id) && styles.disabledBtn]} onPress={() => sendInviteToFriend(friend.user_id)}>
                       <Text style={styles.friendMenuText}>{pendingInviteUserId === friend.user_id ? 'Pending' : 'Invite'}</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.friendMenuBtn, styles.friendRemoveBtn]} onPress={() => removeFriend(friend.user_id)}><Text style={styles.friendRemoveText}>Remove</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.friendMenuBtn, styles.friendRemoveBtn]} onPress={() => { setOpenFriendMenuId(null); removeFriend(friend.user_id); }}><Text style={styles.friendRemoveText}>Remove</Text></TouchableOpacity>
                   </View>
                 )}
               </View>
@@ -1288,7 +1299,9 @@ export default function GameScreen() {
                   <View style={styles.profileActions}>
                     {isFriend(publicProfile.player.user_id) ? (
                       <>
-                        <TouchableOpacity style={styles.inlineAction} onPress={() => sendInviteToFriend(publicProfile.player.user_id)}><Text style={styles.inlineActionText}>Invite / Request Board</Text></TouchableOpacity>
+                        <TouchableOpacity disabled={!selectedProfileFriend?.online || !(roomId || sessionId) || pendingInviteUserId === publicProfile.player.user_id} style={[styles.inlineAction, (!selectedProfileFriend?.online || !(roomId || sessionId) || pendingInviteUserId === publicProfile.player.user_id) && styles.disabledBtn]} onPress={() => sendInviteToFriend(publicProfile.player.user_id)}>
+                          <Text style={styles.inlineActionText}>{pendingInviteUserId === publicProfile.player.user_id ? 'Pending Invite' : 'Invite / Request Board'}</Text>
+                        </TouchableOpacity>
                         <TouchableOpacity style={styles.declineBtn} onPress={() => removeFriend(publicProfile.player.user_id)}><Text style={styles.declineText}>Remove Friend</Text></TouchableOpacity>
                       </>
                     ) : (
@@ -1910,9 +1923,11 @@ const styles = StyleSheet.create({
   socialName: { color: '#F8FAFC', fontSize: 13, fontWeight: '900' },
   socialMeta: { color: '#9CA3AF', fontSize: 11, fontWeight: '800', marginTop: 2, textTransform: 'capitalize' },
   profileActions: { gap: 8, marginBottom: 10 },
+  friendRowWrap: { position: 'relative', zIndex: 1 },
+  friendRowWrapOpen: { zIndex: 30 },
   friendDotsBtn: { width: 36, height: 36, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', alignItems: 'center', justifyContent: 'center' },
-  friendMenu: { marginTop: -4, marginBottom: 8, marginLeft: 44, borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#0F172A', padding: 6, flexDirection: 'row', gap: 6 },
-  friendMenuBtn: { flex: 1, minHeight: 34, borderRadius: 10, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
+  friendMenu: { position: 'absolute', right: 0, top: 42, width: 164, borderRadius: 14, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#0F172A', padding: 6, gap: 6, shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 12 },
+  friendMenuBtn: { minHeight: 34, borderRadius: 10, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
   friendMenuText: { color: '#93C5FD', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
   friendRemoveBtn: { backgroundColor: '#2A1115', borderColor: '#7F1D1D' },
   friendRemoveText: { color: '#FCA5A5', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },

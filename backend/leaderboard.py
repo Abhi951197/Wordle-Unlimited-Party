@@ -348,6 +348,8 @@ def _backfill_stats_from_results(conn) -> None:
             "SELECT guesses FROM game_results WHERE user_id = ? AND scope = ? AND won = ?",
             (stat["user_id"], stat["scope"], True),
         ).fetchall()]
+        if len(results) < int(stat.get("wins") or 0):
+            continue
         for result in results:
             guesses = max(1, min(int((result or {}).get("guesses") or 0), 6))
             counts[guesses - 1] += 1

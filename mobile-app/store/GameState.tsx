@@ -364,6 +364,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const localDraftActiveRef = useRef(false);
   const locallyRecordedSessionsRef = useRef<Set<string>>(new Set());
   const pendingSubmitRecoveryRef = useRef<{ guess: string; createdAt: number } | null>(null);
+  const roomPlayersRef = useRef<RoomPlayer[]>([]);
 
   useEffect(() => {
     latestRoomRef.current = { roomId, playerId };
@@ -1177,9 +1178,23 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const nextShared = data.shared_board ?? null;
     const nextIndividual = data.individual_board ?? null;
     const active = boardMode === 'individual' ? nextIndividual : nextShared;
+    const nextPlayers: RoomPlayer[] = data.players ?? [];
+
+    const previousPlayers = roomPlayersRef.current;
+    if (
+      roomId === data.room_id &&
+      currentPlayerId &&
+      nextPlayers.some(player => player.player_id === currentPlayerId) &&
+      previousPlayers.length > nextPlayers.length
+    ) {
+      const nextIds = new Set(nextPlayers.map(player => player.player_id));
+      const removedPlayer = previousPlayers.find(player => !nextIds.has(player.player_id));
+      if (removedPlayer) showToast(`${removedPlayer.player_name} left the room`, 'info');
+    }
+    roomPlayersRef.current = nextPlayers;
 
     setRoomId(data.room_id);
-    setRoomPlayers(data.players ?? []);
+    setRoomPlayers(nextPlayers);
     setMaxRoomPlayers(data.max_players ?? 8);
     setLivekit(data.livekit ?? null);
     setActiveBoardState(boardMode);
@@ -1420,8 +1435,18 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const leaveRoom = (options: { forgetIdentity?: boolean } = { forgetIdentity: true }) => {
+    const activeRoomId = latestRoomRef.current.roomId;
+    const activePlayerId = latestRoomRef.current.playerId;
+    if (activeRoomId && activePlayerId) {
+      fetch(`${API_URL}/rooms/${activeRoomId}/leave`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ player_id: activePlayerId }),
+      }).catch(() => {});
+    }
     setRoomId(null);
     setPlayerId(null);
+    roomPlayersRef.current = [];
     setPlayerEmoji('🙂');
     setRoomPlayers([]);
     setMaxRoomPlayers(8);

@@ -121,6 +121,9 @@ class RoomInputRequest(BaseModel):
     current_guess: str
     client_input_version: int | None = None
 
+class RoomLeaveRequest(BaseModel):
+    player_id: str
+
 class RoomDifficultyRequest(BaseModel):
     player_id: str
     difficulty: str
@@ -672,7 +675,7 @@ def _room_state(room_id: str, player_id: str | None = None) -> RoomStateResponse
         raise HTTPException(status_code=404, detail="Room not found")
 
     room = rooms[room_id]
-    if player_id and player_id not in room["player_sessions"]:
+    if player_id and player_id in room["players"] and player_id not in room["player_sessions"]:
         room["player_sessions"][player_id] = _create_session(room.get("difficulty", "easy"))
     active_board = room["player_active_boards"].get(player_id, "shared") if player_id else "shared"
     shared_session_id = room.get("active_shared_session_id")
@@ -723,6 +726,39 @@ def _require_room_player(room_id: str, player_id: str) -> dict[str, Any]:
     if player_id not in rooms[room_id]["players"]:
         raise HTTPException(status_code=403, detail="Player is not in this room")
     return rooms[room_id]
+
+def _remove_room_player(room_id: str, player_id: str) -> dict[str, Any]:
+    room_id = room_id.strip().upper()
+    if room_id not in rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    room = rooms[room_id]
+    removed_player = room.get("players", {}).pop(player_id, None)
+    room.get("player_active_boards", {}).pop(player_id, None)
+    individual_session_id = room.get("player_sessions", {}).pop(player_id, None)
+    if individual_session_id and individual_session_id != room.get("active_shared_session_id"):
+        sessions.pop(individual_session_id, None)
+
+    share_request = room.get("share_request") or {}
+    if share_request.get("from_player_id") == player_id:
+        room["share_request"] = None
+
+    shared_session_id = room.get("active_shared_session_id")
+    if shared_session_id in sessions and sessions[shared_session_id].get("typing_player_id") == player_id:
+        sessions[shared_session_id]["typing_player_id"] = None
+        sessions[shared_session_id]["typing_player_name"] = None
+        sessions[shared_session_id]["typing_player_emoji"] = None
+
+    if not room.get("players"):
+        rooms.pop(room_id, None)
+        if shared_session_id:
+            sessions.pop(shared_session_id, None)
+        return {"room_id": room_id, "removed": bool(removed_player), "players": []}
+
+    if room.get("host_player_id") == player_id:
+        room["host_player_id"] = next(iter(room["players"]))
+    _touch_room(room)
+    return {"room_id": room_id, "removed": bool(removed_player), "players": list(room["players"].values())}
 
 def _active_session_id(room: dict[str, Any], player_id: str) -> str:
     if player_id not in room["player_sessions"]:
@@ -964,6 +1000,10 @@ def join_room(room_id: str, req: RoomJoinRequest):
 @app.get("/rooms/{room_id}", response_model=RoomStateResponse)
 def get_room_state(room_id: str, player_id: str | None = None):
     return _room_state(room_id.strip().upper(), player_id)
+
+@app.post("/rooms/{room_id}/leave")
+def leave_room(room_id: str, req: RoomLeaveRequest):
+    return _remove_room_player(room_id, req.player_id)
 
 @app.post("/rooms/{room_id}/guess", response_model=RoomStateResponse)
 def submit_room_guess(room_id: str, req: RoomGuessRequest):
