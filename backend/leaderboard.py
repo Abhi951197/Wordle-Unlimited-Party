@@ -26,6 +26,7 @@ DIFFICULTY_POINTS = {"easy": 100, "moderate": 140, "difficult": 180, "prodigy": 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 ALL_TIME_KEY = "all"
 PERIOD_TYPES = ("weekly", "all_time")
+PARTY_INVITE_TTL_SECONDS = 30
 
 ACHIEVEMENTS = [
     {"id": "first_win", "title": "First Win", "description": "Win your first puzzle.", "icon": "🏆", "target": 1},
@@ -549,6 +550,10 @@ def _is_online(updated_at: str | None) -> bool:
     return datetime.now(timezone.utc) - _parse_iso(updated_at) <= timedelta(seconds=75)
 
 
+def _invite_is_live(created_at: str | None) -> bool:
+    return datetime.now(timezone.utc) - _parse_iso(created_at) <= timedelta(seconds=PARTY_INVITE_TTL_SECONDS)
+
+
 def touch_presence(user_id: str | None, token: str | None, status: str = "online", room_id: str | None = None) -> bool:
     if not verify_player(user_id, token):
         return False
@@ -588,7 +593,9 @@ def friends_state(user_id: str | None, token: str | None) -> dict[str, Any] | No
     if not verify_player(user_id, token):
         return None
     touch_presence(user_id, token)
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=PARTY_INVITE_TTL_SECONDS)).isoformat()
     with _conn() as conn:
+        _execute(conn, "UPDATE party_invites SET status = 'expired', updated_at = ? WHERE status = 'pending' AND created_at < ?", (_now_iso(), cutoff))
         friendship_rows = [_row_to_dict(row) for row in _execute(
             conn,
             """
@@ -635,6 +642,18 @@ def friends_state(user_id: str | None, token: str | None) -> dict[str, Any] | No
             """,
             (user_id,),
         ).fetchall()]
+        outgoing_invite_rows = [_row_to_dict(row) for row in _execute(
+            conn,
+            """
+            SELECT pi.invite_id, pi.room_id, pi.created_at, p.user_id, p.username, p.emoji
+            FROM party_invites pi
+            JOIN players p ON p.user_id = pi.to_user_id
+            WHERE pi.from_user_id = ? AND pi.status = 'pending'
+            ORDER BY pi.created_at DESC
+            LIMIT 20
+            """,
+            (user_id,),
+        ).fetchall()]
 
     return {
         "friends": [
@@ -656,8 +675,12 @@ def friends_state(user_id: str | None, token: str | None) -> dict[str, Any] | No
             for row in outgoing_rows if row
         ],
         "party_invites": [
-            {"invite_id": row["invite_id"], "room_id": row["room_id"], "created_at": row["created_at"], "from_player": _public_player(row)}
+            {"invite_id": row["invite_id"], "room_id": row["room_id"], "created_at": row["created_at"], "expires_in": max(0, PARTY_INVITE_TTL_SECONDS - int((datetime.now(timezone.utc) - _parse_iso(row["created_at"])).total_seconds())), "from_player": _public_player(row)}
             for row in invite_rows if row
+        ],
+        "outgoing_party_invites": [
+            {"invite_id": row["invite_id"], "room_id": row["room_id"], "created_at": row["created_at"], "expires_in": max(0, PARTY_INVITE_TTL_SECONDS - int((datetime.now(timezone.utc) - _parse_iso(row["created_at"])).total_seconds())), "to_player": _public_player(row)}
+            for row in outgoing_invite_rows if row
         ],
     }
 
@@ -720,22 +743,59 @@ def respond_friend_request(user_id: str | None, token: str | None, request_id: s
     return {"status": status, "request_id": request_id, "from_user_id": request["from_user_id"], "to_user_id": request["to_user_id"]}
 
 
+def remove_friend(user_id: str | None, token: str | None, friend_user_id: str) -> dict[str, Any] | None:
+    if not verify_player(user_id, token) or not friend_user_id or friend_user_id == user_id:
+        return None
+    a, b = _friend_pair(user_id, friend_user_id)
+    now = _now_iso()
+    with _conn() as conn:
+        _execute(conn, "DELETE FROM friendships WHERE user_a = ? AND user_b = ?", (a, b))
+        _execute(
+            conn,
+            """
+            UPDATE friend_requests
+            SET status = 'removed', updated_at = ?
+            WHERE (from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)
+            """,
+            (now, user_id, friend_user_id, friend_user_id, user_id),
+        )
+        _execute(
+            conn,
+            """
+            UPDATE party_invites
+            SET status = 'declined', updated_at = ?
+            WHERE status = 'pending' AND ((from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?))
+            """,
+            (now, user_id, friend_user_id, friend_user_id, user_id),
+        )
+    return {"status": "removed", "user_id": user_id, "friend_user_id": friend_user_id}
+
+
 def create_party_invite(user_id: str | None, token: str | None, to_user_id: str, room_id: str) -> dict[str, Any] | None:
     player = verify_player(user_id, token)
     if not player or not to_user_id or not room_id:
         return None
     a, b = _friend_pair(user_id, to_user_id)
     now = _now_iso()
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=PARTY_INVITE_TTL_SECONDS)).isoformat()
     with _conn() as conn:
+        _execute(conn, "UPDATE party_invites SET status = 'expired', updated_at = ? WHERE status = 'pending' AND created_at < ?", (now, cutoff))
         if _execute(conn, "SELECT 1 FROM friendships WHERE user_a = ? AND user_b = ?", (a, b)).fetchone() is None:
             return None
+        existing = _row_to_dict(_execute(
+            conn,
+            "SELECT * FROM party_invites WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+            (user_id, to_user_id),
+        ).fetchone())
+        if existing:
+            return {"invite_id": existing["invite_id"], "room_id": existing["room_id"], "from_player": _public_player(player), "to_user_id": to_user_id, "created_at": existing["created_at"], "expires_in": max(0, PARTY_INVITE_TTL_SECONDS - int((datetime.now(timezone.utc) - _parse_iso(existing["created_at"])).total_seconds()))}
         invite_id = str(uuid.uuid4())
         _execute(
             conn,
             "INSERT INTO party_invites (invite_id, from_user_id, to_user_id, room_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
             (invite_id, user_id, to_user_id, room_id.strip().upper(), now, now),
         )
-    return {"invite_id": invite_id, "room_id": room_id.strip().upper(), "from_player": _public_player(player), "to_user_id": to_user_id, "created_at": now}
+    return {"invite_id": invite_id, "room_id": room_id.strip().upper(), "from_player": _public_player(player), "to_user_id": to_user_id, "created_at": now, "expires_in": PARTY_INVITE_TTL_SECONDS}
 
 
 def respond_party_invite(user_id: str | None, token: str | None, invite_id: str, accept: bool) -> dict[str, Any] | None:
@@ -750,6 +810,9 @@ def respond_party_invite(user_id: str | None, token: str | None, invite_id: str,
         ).fetchone())
         if not invite:
             return None
+        if not _invite_is_live(invite.get("created_at")):
+            _execute(conn, "UPDATE party_invites SET status = 'expired', updated_at = ? WHERE invite_id = ?", (now, invite_id))
+            return {"status": "expired", "invite_id": invite_id, "from_user_id": invite["from_user_id"], "to_user_id": invite["to_user_id"], "room_id": invite["room_id"]}
         status = "accepted" if accept else "declined"
         _execute(conn, "UPDATE party_invites SET status = ?, updated_at = ? WHERE invite_id = ?", (status, now, invite_id))
     return {"status": status, "invite_id": invite_id, "from_user_id": invite["from_user_id"], "to_user_id": invite["to_user_id"], "room_id": invite["room_id"]}
@@ -805,6 +868,21 @@ def _upsert_weekly_period_from_import(conn, user_id: str, row: dict[str, Any], p
     ).fetchone())
     if existing and int(existing.get("games_played") or 0) >= int(row["games_played"]):
         return
+    if existing:
+        existing_distribution = [int(existing.get(f"guess_{index}") or 0) for index in range(1, 7)]
+        row = {
+            **row,
+            "score": max(int(existing.get("score") or 0), row["score"]),
+            "games_played": max(int(existing.get("games_played") or 0), row["games_played"]),
+            "wins": max(int(existing.get("wins") or 0), row["wins"]),
+            "losses": max(int(existing.get("losses") or 0), row["losses"]),
+            "current_streak": max(int(existing.get("current_streak") or 0), row["current_streak"]),
+            "max_streak": max(int(existing.get("max_streak") or 0), row["max_streak"]),
+            "total_guesses": max(int(existing.get("total_guesses") or 0), row["total_guesses"]),
+            "hint_games": max(int(existing.get("hint_games") or 0), row["hint_games"]),
+            "hint_wins": max(int(existing.get("hint_wins") or 0), row["hint_wins"]),
+            "guess_distribution": [max(existing_distribution[index], row["guess_distribution"][index]) for index in range(6)],
+        }
     period_row = {
         "user_id": user_id,
         "scope": row["scope"],
@@ -899,6 +977,21 @@ def import_player_stats(user_id: str | None, token: str | None, stats_by_scope: 
             existing = _row_to_dict(_execute(conn, "SELECT * FROM player_stats WHERE user_id = ? AND scope = ?", (user_id, scope)).fetchone())
             if existing and int(existing.get("games_played") or 0) >= int(row["games_played"]):
                 continue
+            if existing:
+                existing_distribution = [int(existing.get(f"guess_{index}") or 0) for index in range(1, 7)]
+                row = {
+                    **row,
+                    "score": max(int(existing.get("score") or 0), row["score"]),
+                    "games_played": max(int(existing.get("games_played") or 0), row["games_played"]),
+                    "wins": max(int(existing.get("wins") or 0), row["wins"]),
+                    "losses": max(int(existing.get("losses") or 0), row["losses"]),
+                    "current_streak": max(int(existing.get("current_streak") or 0), row["current_streak"]),
+                    "max_streak": max(int(existing.get("max_streak") or 0), row["max_streak"]),
+                    "total_guesses": max(int(existing.get("total_guesses") or 0), row["total_guesses"]),
+                    "hint_games": max(int(existing.get("hint_games") or 0), row["hint_games"]),
+                    "hint_wins": max(int(existing.get("hint_wins") or 0), row["hint_wins"]),
+                    "guess_distribution": [max(existing_distribution[index], row["guess_distribution"][index]) for index in range(6)],
+                }
             _execute(
                 conn,
                 """

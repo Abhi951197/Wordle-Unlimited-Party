@@ -25,6 +25,7 @@ from leaderboard import (
     register_player,
     respond_friend_request,
     respond_party_invite,
+    remove_friend,
     search_players,
     touch_presence,
     username_available,
@@ -253,6 +254,11 @@ class FriendRequestRespondModel(BaseModel):
     request_id: str
     accept: bool
 
+class FriendRemoveModel(BaseModel):
+    user_id: str
+    leaderboard_token: str
+    friend_user_id: str
+
 class PresenceRequest(BaseModel):
     user_id: str
     leaderboard_token: str
@@ -394,6 +400,14 @@ async def respond_friend(req: FriendRequestRespondModel):
     await _notify_social(result.get("from_user_id"), {"type": "friend_response", "response": result})
     return result
 
+@app.post("/friends/remove")
+async def remove_public_friend(req: FriendRemoveModel):
+    result = remove_friend(req.user_id, req.leaderboard_token, req.friend_user_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Friend not found")
+    await _notify_social(req.friend_user_id, {"type": "friend_removed", "response": result})
+    return result
+
 @app.post("/presence")
 def update_presence(req: PresenceRequest):
     if not touch_presence(req.user_id, req.leaderboard_token, req.status, req.room_id):
@@ -414,6 +428,8 @@ async def respond_invite(req: PartyInviteRespondModel):
     if result is None:
         raise HTTPException(status_code=404, detail="Invite not found")
     await _notify_social(result.get("from_user_id"), {"type": "party_invite_response", "response": result})
+    if result.get("status") == "accepted":
+        await _notify_social(result.get("from_user_id"), {"type": "party_invite_accepted", "room_id": result.get("room_id")})
     return result
 
 @app.get("/players/{user_id}/public-profile", response_model=PublicProfileResponse)

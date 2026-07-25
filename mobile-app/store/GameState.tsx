@@ -200,7 +200,16 @@ export interface PartyInviteItem {
   invite_id: string;
   room_id: string;
   created_at: string;
+  expires_in?: number;
   from_player: PublicPlayer;
+}
+
+export interface OutgoingPartyInviteItem {
+  invite_id: string;
+  room_id: string;
+  created_at: string;
+  expires_in?: number;
+  to_player: PublicPlayer;
 }
 
 export interface FriendsState {
@@ -208,6 +217,7 @@ export interface FriendsState {
   incoming_requests: FriendRequestItem[];
   outgoing_requests: FriendRequestItem[];
   party_invites: PartyInviteItem[];
+  outgoing_party_invites?: OutgoingPartyInviteItem[];
 }
 
 interface GameStateContextType {
@@ -251,6 +261,7 @@ interface GameStateContextType {
   searchPlayers: (query: string) => Promise<PublicPlayer[]>;
   sendFriendRequest: (toUserId: string) => Promise<boolean>;
   respondFriendRequest: (requestId: string, accept: boolean) => Promise<boolean>;
+  removeFriend: (friendUserId: string) => Promise<boolean>;
   inviteFriendToRoom: (toUserId: string) => Promise<boolean>;
   respondPartyInvite: (inviteId: string, accept: boolean) => Promise<boolean>;
   clearPendingPartyInvite: () => void;
@@ -442,12 +453,20 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         } else if (message.type === 'friend_response') {
           showToast('Friend list updated', 'info');
           void fetchFriends();
+        } else if (message.type === 'friend_removed') {
+          showToast('Friend removed', 'info');
+          void fetchFriends();
         } else if (message.type === 'party_invite') {
           setPendingPartyInvite(message.invite);
           showToast('Party invite received', 'info');
           void fetchFriends();
         } else if (message.type === 'party_invite_response') {
           showToast('Party invite updated', 'info');
+          void fetchFriends();
+        } else if (message.type === 'party_invite_accepted') {
+          setActiveBoardState('shared');
+          showToast('Friend joined your board', 'info');
+          void fetchFriends();
         }
       } catch {
         // Ignore malformed realtime messages.
@@ -950,6 +969,28 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
+  const removeFriend = async (friendUserId: string) => {
+    if (!leaderboardProfile) return false;
+    try {
+      const res = await fetch(`${API_URL}/friends/remove`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: leaderboardProfile.user_id,
+          leaderboard_token: leaderboardProfile.leaderboard_token,
+          friend_user_id: friendUserId,
+        }),
+      });
+      if (!res.ok) throw new Error('friend');
+      showToast('Friend removed', 'info');
+      await fetchFriends();
+      return true;
+    } catch {
+      showToast('Could not remove friend', 'warning');
+      return false;
+    }
+  };
+
   const inviteFriendToRoom = async (toUserId: string) => {
     if (!leaderboardProfile) return false;
     let inviteRoomId = roomId;
@@ -994,6 +1035,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       });
       if (!res.ok) throw new Error('invite');
       showToast('Party invite sent', 'info');
+      await fetchFriends();
       return true;
     } catch {
       showToast('Could not invite that friend', 'warning');
@@ -1015,7 +1057,13 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }),
       });
       if (!res.ok) throw new Error('invite');
+      const data = await res.json();
       if (pendingPartyInvite?.invite_id === inviteId) setPendingPartyInvite(null);
+      if (data.status === 'expired') {
+        showToast('Invite expired', 'warning');
+        await fetchFriends();
+        return false;
+      }
       await fetchFriends();
       return true;
     } catch {
@@ -1728,7 +1776,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       guesses, results, currentGuess, gameStatus, letterStates, stats, dailyDate, dailyStreak,
       startGame, startDailyGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
       registerLeaderboardProfile, checkUsername, fetchLeaderboard, fetchPublicProfile, fetchFriends, searchPlayers,
-      sendFriendRequest, respondFriendRequest, inviteFriendToRoom, respondPartyInvite, clearPendingPartyInvite,
+      sendFriendRequest, respondFriendRequest, removeFriend, inviteFriendToRoom, respondPartyInvite, clearPendingPartyInvite,
       changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, sendChatMessage, addLetter, removeLetter,
       submitGuess, getHint, hints, hintsUsed, invalidShake, lastSubmittedRow,
       answer, answerInfo, maxGuesses, toast,
