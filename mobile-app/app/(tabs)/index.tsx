@@ -432,6 +432,7 @@ export default function GameScreen() {
 
   const chooseDailyMode = async () => {
     trackEvent('Mode Selected', { mode: 'daily' });
+    if (!leaderboardProfile && !ensureLeaderboardProfile()) return;
     if (roomId) leaveRoom();
     await startDailyGame();
     setSelectedMode('solo');
@@ -439,10 +440,7 @@ export default function GameScreen() {
   };
 
   const startSelectedDifficulty = async (nextDifficulty = difficulty) => {
-    if (!leaderboardProfile) {
-      setUsernameInput(roomName.trim().replace(/\s+/g, '_').toLowerCase());
-      setProfileModal(true);
-    }
+    if (!leaderboardProfile && !ensureLeaderboardProfile()) return;
     if (selectedMode === 'solo') {
       if (roomId) leaveRoom();
       await startGame(nextDifficulty);
